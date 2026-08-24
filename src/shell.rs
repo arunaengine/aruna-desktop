@@ -35,6 +35,10 @@ pub struct ShellContext {
     pub api_base_url: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub auth_callback_origin: Option<String>,
+    /// The remembered realm. The portal's welcome guard trusts this over any
+    /// address heuristic, so a loopback realm still counts as one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub realm_url: Option<String>,
     pub features: Features,
 }
 
@@ -69,6 +73,7 @@ pub fn context(settings: &NodeSettings, running: bool) -> ShellContext {
         // node's own portal listener, and only while it serves one.
         auth_callback_origin: (local && settings.portal_dir.is_some())
             .then(|| settings.portal_url()),
+        realm_url: settings.realm_url.clone(),
         features: Features {
             desktop: true,
             system_browser_auth: true,
@@ -195,6 +200,7 @@ mod tests {
         let context = context(&NodeSettings::default(), false);
         assert_eq!(context.api_base_url, "http://127.0.0.1:34116/api/v1");
         assert!(context.auth_callback_origin.is_none());
+        assert!(context.realm_url.is_none());
     }
 
     #[test]
@@ -215,6 +221,7 @@ mod tests {
     fn writes_the_context_once() {
         let script = init_script(&context(&enrolled(), true));
         assert!(script.contains("\"apiBaseUrl\":\"http://127.0.0.1:34116/api/v1\""));
+        assert!(script.contains("\"realmUrl\":\"https://aruna.example\""));
         assert!(script.contains("\"systemBrowserAuth\":true"));
         assert!(script.contains("version: 1"));
         assert!(script.contains("Object.defineProperty(window, '__ARUNA_DESKTOP__'"));
