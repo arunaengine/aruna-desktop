@@ -76,6 +76,16 @@ impl LogBuffer {
         }
     }
 
+    /// The last `lines` lines, oldest first, as the portal renders them.
+    pub fn tail(&self, lines: usize) -> Vec<String> {
+        let buffer = self.inner.lock().expect("log buffer poisoned");
+        buffer
+            .iter()
+            .skip(buffer.len().saturating_sub(lines))
+            .map(|line| line.text.clone())
+            .collect()
+    }
+
     pub fn clear(&self) {
         self.inner.lock().expect("log buffer poisoned").clear();
     }
@@ -111,6 +121,17 @@ mod tests {
         assert_eq!(page.lines.len(), CAPACITY);
         assert_eq!(page.lines[0].seq, 5);
         assert!(page.truncated);
+    }
+
+    #[test]
+    fn tails_recent_lines() {
+        let buffer = LogBuffer::default();
+        for index in 0..5 {
+            buffer.push(Stream::Stdout, index.to_string());
+        }
+        assert_eq!(buffer.tail(2), ["3", "4"]);
+        assert_eq!(buffer.tail(50).len(), 5);
+        assert!(buffer.tail(0).is_empty());
     }
 
     #[test]

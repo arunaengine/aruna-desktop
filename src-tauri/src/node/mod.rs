@@ -16,7 +16,7 @@ use tokio::sync::oneshot;
 use crate::error::DesktopError;
 use crate::settings::NodeSettings;
 
-pub use health::{HealthReport, probe, realm_id};
+pub use health::{HealthReport, NodeInfo, info, probe, realm_id};
 pub use logs::{LogBuffer, LogPage, Stream};
 
 /// Emitted to the frontend whenever the supervised node changes state.
@@ -53,6 +53,8 @@ pub struct NodeStatus {
 #[derive(Default)]
 struct Inner {
     status: NodeStatus,
+    /// When the current run reached `Running`, for the uptime the portal shows.
+    started: Option<std::time::Instant>,
     stop: Option<oneshot::Sender<()>>,
     task: Option<tauri::async_runtime::JoinHandle<()>>,
 }
@@ -321,8 +323,23 @@ impl Supervisor {
         });
     }
 
+    /// Seconds the node has been running, `None` while it is not.
+    pub fn uptime(&self) -> Option<u64> {
+        self.inner
+            .lock()
+            .expect("supervisor poisoned")
+            .started
+            .map(|started| started.elapsed().as_secs())
+    }
+
     fn publish(&self, status: NodeStatus) {
-        self.inner.lock().expect("supervisor poisoned").status = status.clone();
+        let mut inner = self.inner.lock().expect("supervisor poisoned");
+        inner.started = match status.state {
+            NodeState::Running => inner.started.or_else(|| Some(std::time::Instant::now())),
+            _ => None,
+        };
+        inner.status = status.clone();
+        drop(inner);
         if let Err(error) = self.app.emit(STATUS_EVENT, status) {
             tracing::warn!(%error, "Could not emit the node status");
         }

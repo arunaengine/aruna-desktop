@@ -35,6 +35,40 @@ pub async fn probe(client: &reqwest::Client, ops_port: u16) -> HealthReport {
     }
 }
 
+/// What a node reports about itself to a caller holding no token: its realm and
+/// the API version it serves. Its node id needs a realm token, so the desktop
+/// never sees one and the portal reads it with the owner's own.
+#[derive(Clone, Debug, Default, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct NodeInfo {
+    pub realm: Option<String>,
+    pub version: Option<String>,
+}
+
+/// Reads what the local node publishes about itself.
+pub async fn info(client: &reqwest::Client, base: &str) -> Option<NodeInfo> {
+    let url = format!("{}/api/v1/info", base.trim_end_matches('/'));
+    let response = client.get(&url).timeout(PROBE_TIMEOUT).send().await.ok()?;
+    if !response.status().is_success() {
+        return None;
+    }
+    let body = response.json::<Value>().await.ok()?;
+    Some(read_info(&body))
+}
+
+fn read_info(body: &Value) -> NodeInfo {
+    NodeInfo {
+        realm: body
+            .pointer("/node/realm_id")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        version: body
+            .get("api_version")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+    }
+}
+
 /// Reads the realm a node serves. The route answers without a token, but it
 /// only fills its node list for a caller holding a realm token, so the realm id
 /// is the one field an anonymous desktop can rely on.
@@ -67,5 +101,23 @@ async fn probe_path(client: &reqwest::Client, port: u16, path: &str) -> Probe {
             body: None,
             error: Some(error.to_string()),
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn reads_public_fields() {
+        // Only the realm and the version answer without a token.
+        let info = read_info(&json!({
+            "node": {"status": "available", "realm_id": "r-1"},
+            "api_version": "3.0.0",
+        }));
+        assert_eq!(info.realm.as_deref(), Some("r-1"));
+        assert_eq!(info.version.as_deref(), Some("3.0.0"));
+        assert_eq!(read_info(&json!({"ok": true})), NodeInfo::default());
     }
 }

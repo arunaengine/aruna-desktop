@@ -18,8 +18,10 @@ pub const SCHEME: &str = "aruna";
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EnrollLink {
     pub secret: String,
-    /// The seed node's public base URL, without a trailing slash.
-    pub seed: String,
+    /// The seed node's public base URL, without a trailing slash. Absent from a
+    /// pasted bare code: the node reads its own copy out of the secret, and the
+    /// desktop keeps this one only to watch the join.
+    pub seed: Option<String>,
     pub realm: Option<String>,
 }
 
@@ -27,7 +29,7 @@ pub struct EnrollLink {
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct EnrollInvite {
-    pub seed: String,
+    pub seed: Option<String>,
     pub realm: Option<String>,
 }
 
@@ -37,6 +39,27 @@ impl EnrollLink {
             seed: self.seed.clone(),
             realm: self.realm.clone(),
         }
+    }
+
+    /// Takes an enrollment the portal handed over. Only the secret is required;
+    /// a seed URL beside it has to be an absolute web address.
+    pub fn accept(
+        secret: String,
+        seed: Option<String>,
+        realm: Option<String>,
+    ) -> Result<Self, DesktopError> {
+        let secret = non_empty(&secret)
+            .ok_or_else(|| DesktopError::DeepLink("the secret is empty".into()))?;
+        let seed = seed
+            .as_deref()
+            .and_then(non_empty)
+            .map(|seed| seed_base(&seed))
+            .transpose()?;
+        Ok(Self {
+            secret,
+            seed,
+            realm: realm.as_deref().and_then(non_empty),
+        })
     }
 }
 
@@ -112,7 +135,7 @@ pub fn parse_enroll(url: &Url) -> Result<EnrollLink, DesktopError> {
     let seed = seed.ok_or_else(|| DesktopError::DeepLink("the seed URL is missing".into()))?;
     Ok(EnrollLink {
         secret,
-        seed: seed_base(&seed)?,
+        seed: Some(seed_base(&seed)?),
         realm,
     })
 }
@@ -129,13 +152,7 @@ pub fn parse_paste(text: &str, seed: &str, realm: &str) -> Result<EnrollLink, De
             .map_err(|error| DesktopError::DeepLink(format!("unreadable link: {error}")))?;
         return parse_enroll(&url);
     }
-    let seed = non_empty(seed)
-        .ok_or_else(|| DesktopError::DeepLink("a bare secret needs the seed URL".into()))?;
-    Ok(EnrollLink {
-        secret: text.to_string(),
-        seed: seed_base(&seed)?,
-        realm: non_empty(realm),
-    })
+    EnrollLink::accept(text.to_string(), non_empty(seed), non_empty(realm))
 }
 
 /// Keeps `Url::parse` from reading a bare secret as an opaque URL, and lets the
@@ -216,7 +233,7 @@ mod tests {
         let link = enroll("aruna://enroll?secret=s1&seed=https%3A%2F%2Fseed.example%2F&realm=r-1")
             .expect("a complete link");
         assert_eq!(link.secret, "s1");
-        assert_eq!(link.seed, "https://seed.example");
+        assert_eq!(link.seed.as_deref(), Some("https://seed.example"));
         assert_eq!(link.realm.as_deref(), Some("r-1"));
     }
 
@@ -225,7 +242,7 @@ mod tests {
         // A seed behind a path prefix keeps it; only the trailing slash goes.
         let link = enroll("aruna://enroll?secret=s&seed=https%3A%2F%2Fh.example%2Faruna%2F")
             .expect("a complete link");
-        assert_eq!(link.seed, "https://h.example/aruna");
+        assert_eq!(link.seed.as_deref(), Some("https://h.example/aruna"));
     }
 
     #[test]
@@ -255,11 +272,18 @@ mod tests {
 
     #[test]
     fn pastes_bare_secret() {
+        // The seed is optional: the node reads its own copy out of the secret.
         let link = parse_paste("s1", "https://seed.example/", "r-1").expect("a complete link");
         assert_eq!(link.secret, "s1");
-        assert_eq!(link.seed, "https://seed.example");
+        assert_eq!(link.seed.as_deref(), Some("https://seed.example"));
+        assert!(
+            parse_paste("s1", "", "")
+                .expect("a bare secret")
+                .seed
+                .is_none()
+        );
 
-        assert!(parse_paste("s1", "", "").is_err());
         assert!(parse_paste("  ", "https://seed.example", "").is_err());
+        assert!(parse_paste("s1", "seed.example", "").is_err());
     }
 }

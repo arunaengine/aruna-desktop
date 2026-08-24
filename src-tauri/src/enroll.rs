@@ -50,9 +50,9 @@ pub struct EnrollProgress {
 impl EnrollProgress {
     /// Starts a fresh run for an accepted invitation, discarding any earlier
     /// outcome so a retry is not stuck on the previous failure.
-    pub fn accept(&mut self, seed: &str, realm: Option<&str>) {
+    pub fn accept(&mut self, seed: Option<&str>, realm: Option<&str>) {
         self.phase = EnrollPhase::Received;
-        self.seed = Some(seed.to_string());
+        self.seed = seed.map(str::to_string);
         self.realm = realm.map(str::to_string);
         self.detail = None;
     }
@@ -166,7 +166,7 @@ mod tests {
 
     fn started() -> EnrollProgress {
         let mut progress = EnrollProgress::default();
-        progress.accept("https://seed.example", Some("realm-1"));
+        progress.accept(Some("https://seed.example"), Some("realm-1"));
         progress
     }
 
@@ -256,7 +256,7 @@ mod tests {
     fn retry_clears_failure() {
         let mut progress = started();
         progress.fail("refused");
-        progress.accept("https://seed.example", Some("realm-1"));
+        progress.accept(Some("https://seed.example"), Some("realm-1"));
         assert_eq!(progress.phase, EnrollPhase::Received);
         assert!(progress.detail.is_none());
     }

@@ -42,6 +42,28 @@ impl Default for NodePorts {
     }
 }
 
+/// The local control surface the portal renders: where the node stores data,
+/// what it offers, and whether it runs. Everything else the desktop keeps is
+/// machine configuration the owner never has to see.
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalSettings {
+    pub storage_path: String,
+    pub offered_directories: Vec<String>,
+    pub paused: bool,
+    pub auto_start: bool,
+}
+
+/// A partial edit of [`LocalSettings`]; the portal may send any subset.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct SettingsPatch {
+    pub storage_path: Option<String>,
+    pub offered_directories: Option<Vec<String>>,
+    pub paused: Option<bool>,
+    pub auto_start: Option<bool>,
+}
+
 /// Everything the desktop needs to launch and reach its node. Serialized as the
 /// node's env file, so every field maps to a documented aruna config key.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -51,6 +73,14 @@ pub struct NodeSettings {
     pub binary_path: Option<PathBuf>,
     /// Defaults to `<app data>/node/storage`.
     pub storage_path: Option<PathBuf>,
+    /// Directories the owner offers to the realm. Kept for the portal; realm
+    /// nodes pull them from the node itself, which reads them over its REST.
+    pub offered_directories: Vec<PathBuf>,
+    /// Keeps the node stopped until the owner resumes it, across launches.
+    pub paused: bool,
+    /// The device name the owner typed when enrolling. Display only: the realm
+    /// names the device itself, and the node takes no label from the desktop.
+    pub device_label: Option<String>,
     /// Portal artifact directory; the portal listener stays off while unset.
     pub portal_dir: Option<PathBuf>,
     pub ports: NodePorts,
@@ -84,6 +114,9 @@ impl Default for NodeSettings {
         Self {
             binary_path: None,
             storage_path: None,
+            offered_directories: Vec::new(),
+            paused: false,
+            device_label: None,
             portal_dir: None,
             ports: NodePorts::default(),
             s3_enabled: false,
@@ -164,6 +197,61 @@ impl NodeSettings {
         }
     }
 
+    /// What the portal's local panel shows. The storage path is the effective
+    /// one, so an unset default is still a path the owner can see and change.
+    pub fn local(&self, data_dir: &Path) -> LocalSettings {
+        LocalSettings {
+            storage_path: self.storage_dir(data_dir).display().to_string(),
+            offered_directories: self
+                .offered_directories
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect(),
+            paused: self.paused,
+            auto_start: self.auto_start,
+        }
+    }
+
+    /// Applies a patch from the portal. Absent fields keep their stored value,
+    /// and every path has to be absolute: the node runs with its own working
+    /// directory, so a relative one would point somewhere else entirely.
+    pub fn apply(&mut self, patch: SettingsPatch) -> Result<(), DesktopError> {
+        if let Some(raw) = patch.storage_path {
+            self.storage_path = match raw.trim().is_empty() {
+                true => None,
+                false => Some(absolute("the storage location", &raw)?),
+            };
+        }
+        if let Some(offered) = patch.offered_directories {
+            let mut paths = Vec::with_capacity(offered.len());
+            for raw in offered {
+                paths.push(absolute("an offered directory", &raw)?);
+            }
+            paths.dedup();
+            self.offered_directories = paths;
+        }
+        if let Some(paused) = patch.paused {
+            self.paused = paused;
+        }
+        if let Some(auto_start) = patch.auto_start {
+            self.auto_start = auto_start;
+        }
+        Ok(())
+    }
+
+    /// Forgets this device: the enrollment, what it offered, and where its data
+    /// was. The machine configuration stays, so the app is usable afterwards.
+    pub fn wipe(&mut self) {
+        self.onboarding_secret = None;
+        self.seed_url = None;
+        self.realm = None;
+        self.device_label = None;
+        self.enrolled = false;
+        self.paused = false;
+        self.storage_path = None;
+        self.offered_directories.clear();
+    }
+
     /// Remembers the realm the portal window opens.
     pub fn remember_realm(&mut self, url: &str) {
         self.realm_url = Some(url.to_string());
@@ -172,14 +260,15 @@ impl NodeSettings {
     /// Arms the next start with an accepted invitation. The seed doubles as the
     /// realm to open when none is remembered yet, so a device enrolled straight
     /// from a deep link still has a portal to log in to.
-    pub fn enroll(&mut self, secret: String, seed: String, realm: Option<String>) {
+    pub fn enroll(&mut self, secret: String, seed: Option<String>, realm: Option<String>) {
         if self.realm_url.is_none()
-            && let Ok(origin) = crate::realm::normalize(&seed)
+            && let Some(seed) = seed.as_deref()
+            && let Ok(origin) = crate::realm::normalize(seed)
         {
             self.realm_url = Some(origin);
         }
         self.onboarding_secret = Some(secret);
-        self.seed_url = Some(seed);
+        self.seed_url = seed;
         self.realm = realm;
         self.enrolled = false;
     }
@@ -282,6 +371,16 @@ impl NodeSettings {
     }
 }
 
+fn absolute(label: &str, raw: &str) -> Result<PathBuf, DesktopError> {
+    let path = PathBuf::from(raw.trim());
+    match path.is_absolute() {
+        true => Ok(path),
+        false => Err(DesktopError::Settings(format!(
+            "{label} must be an absolute path"
+        ))),
+    }
+}
+
 fn loopback(port: u16) -> String {
     format!("127.0.0.1:{port}")
 }
@@ -332,7 +431,11 @@ mod tests {
     #[test]
     fn hides_the_secret() {
         let mut settings = NodeSettings::default();
-        settings.enroll("s1".into(), "https://seed.example".into(), Some("r".into()));
+        settings.enroll(
+            "s1".into(),
+            Some("https://seed.example".into()),
+            Some("r".into()),
+        );
         let shown = settings.redacted();
         assert!(shown.onboarding_secret.is_none());
         assert_eq!(shown.seed_url.as_deref(), Some("https://seed.example"));
@@ -343,7 +446,11 @@ mod tests {
     fn keeps_enrollment_fields() {
         // The settings view never sees the secret, so saving must not drop it.
         let mut stored = NodeSettings::default();
-        stored.enroll("s1".into(), "https://seed.example".into(), Some("r".into()));
+        stored.enroll(
+            "s1".into(),
+            Some("https://seed.example".into()),
+            Some("r".into()),
+        );
         stored.remember_realm("https://aruna.example");
 
         let edited = NodeSettings {
@@ -363,12 +470,12 @@ mod tests {
     fn remembers_seed_realm() {
         // A device enrolled from a deep link has no realm address of its own.
         let mut settings = NodeSettings::default();
-        settings.enroll("s1".into(), "https://seed.example/aruna".into(), None);
+        settings.enroll("s1".into(), Some("https://seed.example/aruna".into()), None);
         assert_eq!(settings.realm_url.as_deref(), Some("https://seed.example"));
 
         let mut connected = NodeSettings::default();
         connected.remember_realm("https://aruna.example");
-        connected.enroll("s1".into(), "https://seed.example".into(), None);
+        connected.enroll("s1".into(), Some("https://seed.example".into()), None);
         assert_eq!(
             connected.realm_url.as_deref(),
             Some("https://aruna.example")
@@ -378,7 +485,7 @@ mod tests {
     #[test]
     fn spends_secret_once() {
         let mut settings = NodeSettings::default();
-        settings.enroll("s1".into(), "https://seed.example".into(), None);
+        settings.enroll("s1".into(), Some("https://seed.example".into()), None);
         assert!(!settings.enrolled);
         settings.joined(Some("r-1".into()));
         assert!(settings.onboarding_secret.is_none());
@@ -422,6 +529,92 @@ mod tests {
             ..NodeSettings::default()
         };
         assert!(settings.validate().is_err());
+    }
+
+    #[test]
+    fn shows_effective_paths() {
+        // The panel edits what the node uses, so an unset path is not blank.
+        let view = NodeSettings::default().local(Path::new("/data"));
+        assert_eq!(view.storage_path, "/data/storage");
+        assert!(view.offered_directories.is_empty());
+    }
+
+    #[test]
+    fn applies_partial_edits() {
+        let mut settings = NodeSettings {
+            auto_start: true,
+            ..NodeSettings::default()
+        };
+        settings
+            .apply(SettingsPatch {
+                paused: Some(true),
+                offered_directories: Some(vec!["/home/o/data".into()]),
+                ..SettingsPatch::default()
+            })
+            .expect("a usable patch");
+        assert!(settings.paused);
+        assert!(settings.auto_start);
+        assert_eq!(
+            settings.offered_directories,
+            [PathBuf::from("/home/o/data")]
+        );
+        assert!(settings.storage_path.is_none());
+    }
+
+    #[test]
+    fn rejects_relative_paths() {
+        // The node runs in its own working directory, so a relative path there
+        // would name a different place than the one the owner picked.
+        let mut settings = NodeSettings::default();
+        assert!(
+            settings
+                .apply(SettingsPatch {
+                    storage_path: Some("node/storage".into()),
+                    ..SettingsPatch::default()
+                })
+                .is_err()
+        );
+        assert!(
+            settings
+                .apply(SettingsPatch {
+                    offered_directories: Some(vec!["data".into()]),
+                    ..SettingsPatch::default()
+                })
+                .is_err()
+        );
+        settings
+            .apply(SettingsPatch {
+                storage_path: Some("  ".into()),
+                ..SettingsPatch::default()
+            })
+            .expect("an empty path clears the override");
+        assert!(settings.storage_path.is_none());
+    }
+
+    #[test]
+    fn wipes_device_state() {
+        // The machine configuration survives; the identity and its data do not.
+        let mut settings = NodeSettings {
+            binary_path: Some(PathBuf::from("/opt/aruna")),
+            storage_path: Some(PathBuf::from("/data/elsewhere")),
+            offered_directories: vec![PathBuf::from("/home/o/data")],
+            paused: true,
+            ..NodeSettings::default()
+        };
+        settings.remember_realm("https://aruna.example");
+        settings.enroll("s1".into(), Some("https://seed.example".into()), None);
+        settings.joined(Some("r-1".into()));
+
+        settings.wipe();
+        assert!(!settings.enrolled);
+        assert!(settings.realm.is_none());
+        assert!(settings.seed_url.is_none());
+        assert!(settings.onboarding_secret.is_none());
+        assert!(settings.storage_path.is_none());
+        assert!(settings.offered_directories.is_empty());
+        assert!(!settings.paused);
+        assert_eq!(settings.realm_url.as_deref(), Some("https://aruna.example"));
+        assert_eq!(settings.binary_path, Some(PathBuf::from("/opt/aruna")));
     }
 
     #[test]

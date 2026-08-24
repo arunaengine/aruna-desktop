@@ -28,11 +28,6 @@ pub fn launch_route(state: State<'_, AppState>) -> Landing {
 }
 
 #[tauri::command]
-pub fn node_status(state: State<'_, AppState>) -> NodeStatus {
-    state.supervisor.status()
-}
-
-#[tauri::command]
 pub fn node_start(state: State<'_, AppState>) -> Result<NodeStatus, DesktopError> {
     state.supervisor.start()
 }
@@ -131,7 +126,7 @@ async fn arm(state: &AppState, link: EnrollLink) -> Result<EnrollProgress, Deskt
 
     {
         let mut tracker = state.enroll.lock().expect("enrollment poisoned");
-        tracker.progress.accept(&seed, realm.as_deref());
+        tracker.progress.accept(seed.as_deref(), realm.as_deref());
         tracker.cursor = 0;
     }
 

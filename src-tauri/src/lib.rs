@@ -1,3 +1,4 @@
+mod bridge;
 mod commands;
 mod deep_link;
 mod enroll;
@@ -42,12 +43,14 @@ pub fn run() {
 
     builder
         .plugin(tauri_plugin_deep_link::init())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {
             let handle = app.handle().clone();
             let state = AppState::build(&handle)?;
-            let auto_start = state.settings().auto_start;
+            let settings = state.settings();
+            let auto_start = settings.auto_start && !settings.paused;
             app.manage(state);
 
             // Dev builds carry no installed desktop entry, so the scheme is
@@ -70,8 +73,15 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            bridge::node_status,
+            bridge::node_logs_tail,
+            bridge::node_settings_get,
+            bridge::node_settings_set,
+            bridge::enroll_apply,
+            bridge::wipe_device,
+            bridge::pick_directory,
+            bridge::open_external,
             commands::launch_route,
-            commands::node_status,
             commands::node_start,
             commands::node_stop,
             commands::node_restart,
