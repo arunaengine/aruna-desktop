@@ -150,7 +150,10 @@ pub async fn enroll_poll(state: State<'_, AppState>) -> Result<EnrollProgress, D
 
     // A pasted bare secret names no realm, so the seed is asked which one it
     // serves; the seed cannot list its nodes to an anonymous caller.
-    if ready && realm.is_none() && let Some(seed) = seed.as_deref() {
+    if ready
+        && realm.is_none()
+        && let Some(seed) = seed.as_deref()
+    {
         realm = node::realm_id(&state.http, seed).await;
     }
     let served = match ready {
