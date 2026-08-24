@@ -228,7 +228,8 @@ mod tests {
     }
 
     #[test]
-    fn fails_when_node_gives_up() {
+    fn fails_on_crashloop() {
+        // The supervisor gives up after the node exits again and again.
         let mut progress = started();
         progress.observe(Observed {
             state: NodeState::Failed,
@@ -252,7 +253,7 @@ mod tests {
     }
 
     #[test]
-    fn retry_clears_the_failure() {
+    fn retry_clears_failure() {
         let mut progress = started();
         progress.fail("refused");
         progress.accept("https://seed.example", Some("realm-1"));
@@ -261,7 +262,7 @@ mod tests {
     }
 
     #[test]
-    fn reads_the_node_refusal() {
+    fn reads_node_refusal() {
         // The exact stderr lines the aruna joiner prints before it exits.
         assert_eq!(
             refusal("onboarding bootstrap failed: bootstrap endpoint returned 401 Unauthorized"),

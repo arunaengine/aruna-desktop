@@ -319,7 +319,7 @@ mod tests {
     }
 
     #[test]
-    fn keeps_enrollment_on_edit() {
+    fn keeps_enrollment_fields() {
         // The settings view never sees the secret, so saving must not drop it.
         let mut stored = NodeSettings::default();
         stored.enroll("s1".into(), "https://seed.example".into(), Some("r".into()));
@@ -336,7 +336,7 @@ mod tests {
     }
 
     #[test]
-    fn spends_the_secret_once() {
+    fn spends_secret_once() {
         let mut settings = NodeSettings::default();
         settings.enroll("s1".into(), "https://seed.example".into(), None);
         assert!(!settings.enrolled);

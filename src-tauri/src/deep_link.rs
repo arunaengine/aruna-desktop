@@ -217,7 +217,7 @@ mod tests {
     }
 
     #[test]
-    fn keeps_the_seed_path() {
+    fn keeps_seed_path() {
         // A seed behind a path prefix keeps it; only the trailing slash goes.
         let link = enroll("aruna://enroll?secret=s&seed=https%3A%2F%2Fh.example%2Faruna%2F")
             .expect("a complete link");
@@ -232,13 +232,13 @@ mod tests {
     }
 
     #[test]
-    fn rejects_a_foreign_seed_scheme() {
+    fn rejects_foreign_seed() {
         assert!(enroll("aruna://enroll?secret=s&seed=file%3A%2F%2F%2Fetc%2Fpasswd").is_err());
         assert!(enroll("aruna://enroll?secret=s&seed=seed.example").is_err());
     }
 
     #[test]
-    fn pastes_a_whole_link() {
+    fn pastes_whole_link() {
         let link = parse_paste(
             "  aruna://enroll?secret=s1&seed=https%3A%2F%2Fseed.example&realm=r-1  ",
             "",
@@ -250,7 +250,7 @@ mod tests {
     }
 
     #[test]
-    fn pastes_a_bare_secret() {
+    fn pastes_bare_secret() {
         let link = parse_paste("s1", "https://seed.example/", "r-1").expect("a complete link");
         assert_eq!(link.secret, "s1");
         assert_eq!(link.seed, "https://seed.example");
