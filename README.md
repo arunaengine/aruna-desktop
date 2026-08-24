@@ -94,7 +94,7 @@ reports as a missing bridge half rather than a failed call.
 | `pick_directory` | `{title?, startPath?}` | the chosen path, or `null` |
 | `open_external` | `{url}` | – |
 | `validate_realm` | `{input}` | `{origin, realm, apiVersion, portal}` |
-| `enroll_invite_last` | – | the last `enroll-invite` payload, or `null` |
+| `enroll_invite_last` | – | the uncollected `enroll-invite` payload, or `null` |
 
 Notes on the ones that do more than they say:
 
@@ -122,8 +122,9 @@ Notes on the ones that do more than they say:
   every other scheme.
 * `enroll_invite_last` answers with the last `enroll-invite` payload the shell
   emitted, in exactly the shape it was emitted, and never carries the secret. It
-  is how a portal that subscribed after a cold-start link still sees it. A wipe
-  clears it.
+  is how a portal that subscribed after a cold-start link still sees it, so it
+  serves that payload **once**: collecting it clears it, and a later visit gets
+  `null` rather than reopening an old outcome. A wipe clears it too.
 
 ## The portal artifact
 
@@ -272,9 +273,9 @@ stashing it for a second confirmation.
 ```
 
 The secret is never part of it. A link followed into a cold start can deliver
-the event before the portal is listening, so the same payload stays behind
-`enroll_invite_last`, and the window also navigates to `/app/device`, where
-`node_status` reports the same enrollment either way.
+the event before the portal is listening, so the same payload waits behind
+`enroll_invite_last` for one collection, and the window also navigates to
+`/app/device`, where `node_status` reports the same enrollment either way.
 
 ## Enrollment
 

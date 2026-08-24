@@ -209,12 +209,13 @@ pub async fn arm(
     })
 }
 
-/// The last `aruna://enroll` outcome, exactly as it was emitted, or `null` when
-/// the app has followed no link. A link followed into a cold start emits its
-/// event before the portal listens, so the payload is kept for the asking.
+/// The `aruna://enroll` outcome nobody has collected yet, exactly as it was
+/// emitted, or `null`. A link followed into a cold start emits its event before
+/// the portal listens, so the payload waits here; collecting it clears it,
+/// because replaying an old outcome on every visit is stale news.
 #[tauri::command]
 pub fn enroll_invite_last(state: State<'_, AppState>) -> Option<EnrollInvite> {
-    state.invite.last()
+    state.invite.take()
 }
 
 /// Checks a realm address the owner typed, remembers it as this device's realm

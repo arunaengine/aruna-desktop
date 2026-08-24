@@ -45,9 +45,10 @@ pub struct EnrollInvite {
     pub error: Option<String>,
 }
 
-/// Keeps the last invitation the app acted on. A link followed into a cold
-/// start emits its event before the portal is listening, so the same payload
-/// stays here for the portal to ask for once it is.
+/// Keeps the last invitation the app acted on until someone collects it. A link
+/// followed into a cold start emits its event before the portal is listening,
+/// so the payload waits here — and is handed over exactly once, because a
+/// second reading of the same outcome is stale news, not a missed event.
 #[derive(Debug, Default)]
 pub struct LastInvite(std::sync::Mutex<Option<EnrollInvite>>);
 
@@ -56,8 +57,9 @@ impl LastInvite {
         *self.0.lock().expect("last invite poisoned") = Some(invite);
     }
 
-    pub fn last(&self) -> Option<EnrollInvite> {
-        self.0.lock().expect("last invite poisoned").clone()
+    /// Hands the waiting payload over and forgets it.
+    pub fn take(&self) -> Option<EnrollInvite> {
+        self.0.lock().expect("last invite poisoned").take()
     }
 
     /// A wiped device has no invitation behind it any more.
@@ -300,10 +302,11 @@ mod tests {
     }
 
     #[test]
-    fn keeps_the_last_invite() {
-        // A portal that subscribed too late asks for the payload it missed.
+    fn serves_invite_once() {
+        // A portal that subscribed too late collects the event it missed; every
+        // later visit must not reopen the same outcome.
         let kept = LastInvite::default();
-        assert!(kept.last().is_none());
+        assert!(kept.take().is_none());
 
         let invite = EnrollInvite {
             seed: Some("https://seed.example".into()),
@@ -312,7 +315,8 @@ mod tests {
             error: None,
         };
         kept.remember(invite.clone());
-        assert_eq!(kept.last(), Some(invite));
+        assert_eq!(kept.take(), Some(invite));
+        assert!(kept.take().is_none());
 
         let refused = EnrollInvite {
             seed: None,
@@ -321,10 +325,17 @@ mod tests {
             error: Some("the seed refused the secret".into()),
         };
         kept.remember(refused.clone());
-        assert_eq!(kept.last(), Some(refused));
+        kept.remember(refused.clone());
+        assert_eq!(kept.take(), Some(refused));
 
+        kept.remember(EnrollInvite {
+            seed: None,
+            realm: None,
+            applied: true,
+            error: None,
+        });
         kept.clear();
-        assert!(kept.last().is_none());
+        assert!(kept.take().is_none());
     }
 
     #[test]
