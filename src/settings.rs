@@ -109,6 +109,9 @@ pub struct NodeSettings {
     /// The realm origin the owner connected to. It is what the portal talks to
     /// while no node of this device's own is running.
     pub realm_url: Option<String>,
+    /// The API base that realm resolved to; a deployment may serve portal and
+    /// API on separate listeners, so it cannot be derived from the origin.
+    pub realm_api_url: Option<String>,
     /// Set once the realm has listed this node.
     pub enrolled: bool,
     pub auto_start: bool,
@@ -132,6 +135,7 @@ impl Default for NodeSettings {
             seed_url: None,
             realm: None,
             realm_url: None,
+            realm_api_url: None,
             enrolled: false,
             auto_start: false,
             extra_env: BTreeMap::new(),
@@ -236,9 +240,10 @@ impl NodeSettings {
         self.offered_directories.clear();
     }
 
-    /// Remembers the realm the portal window opens.
-    pub fn remember_realm(&mut self, url: &str) {
+    /// Remembers the realm the portal window opens and where its API answers.
+    pub fn remember_realm(&mut self, url: &str, api: &str) {
         self.realm_url = Some(url.to_string());
+        self.realm_api_url = Some(api.to_string());
     }
 
     /// Arms the next start with an accepted invitation. The seed doubles as the
@@ -431,7 +436,7 @@ mod tests {
         assert_eq!(settings.realm_url.as_deref(), Some("https://seed.example"));
 
         let mut connected = NodeSettings::default();
-        connected.remember_realm("https://aruna.example");
+        connected.remember_realm("https://aruna.example", "https://aruna.example/api/v1");
         connected.enroll("s1".into(), Some("https://seed.example".into()), None);
         assert_eq!(
             connected.realm_url.as_deref(),
@@ -558,7 +563,7 @@ mod tests {
             paused: true,
             ..NodeSettings::default()
         };
-        settings.remember_realm("https://aruna.example");
+        settings.remember_realm("https://aruna.example", "https://aruna.example/api/v1");
         settings.enroll("s1".into(), Some("https://seed.example".into()), None);
         settings.joined(Some("r-1".into()));
 

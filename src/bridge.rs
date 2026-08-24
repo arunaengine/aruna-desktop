@@ -233,7 +233,7 @@ pub async fn validate_realm(
         .map_err(|reach| DesktopError::Unreachable(reach.message(&origin)))?;
 
     let mut settings = state.settings();
-    settings.remember_realm(&target.origin);
+    settings.remember_realm(&target.origin, &target.api_base_url);
     state.store(settings)?;
     shell::reconnect(&app);
     Ok(target)

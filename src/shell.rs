@@ -64,7 +64,10 @@ impl Shell {
 pub fn context(settings: &NodeSettings, running: bool) -> ShellContext {
     let local = settings.enrolled && running;
     let api_base_url = match (local, settings.realm_url.as_deref()) {
-        (false, Some(realm)) => format!("{}/api/v1", realm.trim_end_matches('/')),
+        (false, Some(realm)) => settings
+            .realm_api_url
+            .clone()
+            .unwrap_or_else(|| format!("{}/api/v1", realm.trim_end_matches('/'))),
         _ => bridge::api_base(settings),
     };
     ShellContext {
@@ -167,7 +170,7 @@ mod tests {
 
     fn enrolled() -> NodeSettings {
         let mut settings = NodeSettings::default();
-        settings.remember_realm("https://aruna.example");
+        settings.remember_realm("https://aruna.example", "https://aruna.example/api/v1");
         settings.joined(Some("r-1".into()));
         settings
     }
@@ -192,6 +195,16 @@ mod tests {
             context(&settings, true).api_base_url,
             "https://aruna.example/api/v1"
         );
+    }
+
+    #[test]
+    fn resolved_api_wins() {
+        // A realm may serve its portal and API on separate listeners.
+        let mut settings = NodeSettings::default();
+        settings.remember_realm("http://127.0.0.1:43025", "http://127.0.0.1:43021/api/v1");
+        let context = context(&settings, false);
+        assert_eq!(context.api_base_url, "http://127.0.0.1:43021/api/v1");
+        assert_eq!(context.realm_url.as_deref(), Some("http://127.0.0.1:43025"));
     }
 
     #[test]

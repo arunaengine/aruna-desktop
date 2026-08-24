@@ -19,6 +19,9 @@ const CONFIG_PATH: &str = "/portal-config.json";
 #[serde(rename_all = "camelCase")]
 pub struct RealmTarget {
     pub origin: String,
+    /// The API base that actually answered; a deployment may serve the portal
+    /// and the API on separate listeners, so it is not derivable from `origin`.
+    pub api_base_url: String,
     pub realm: Option<String>,
     pub api_version: Option<String>,
     pub portal: bool,
@@ -123,7 +126,7 @@ pub async fn check(client: &reqwest::Client, origin: &str) -> Result<RealmTarget
     let mut failure = config.err();
     for url in urls {
         match get_json(client, &url).await {
-            Ok(info) => match target(origin, &info, portal) {
+            Ok(info) => match target(origin, api_of(&url), &info, portal) {
                 Some(target) => return Ok(target),
                 None => failure = Some(Reach::NotAruna),
             },
@@ -146,12 +149,18 @@ fn api_base(origin: &str, raw: &str) -> Option<String> {
     Some(base.as_str().trim_end_matches('/').to_string())
 }
 
+/// The API base an `/info` probe URL stands for.
+fn api_of(url: &str) -> &str {
+    url.trim_end_matches("/info").trim_end_matches('/')
+}
+
 /// An `/info` body without a realm id is some other service answering on the
 /// same address, not an aruna node.
-fn target(origin: &str, info: &Value, portal: bool) -> Option<RealmTarget> {
+fn target(origin: &str, api_base: &str, info: &Value, portal: bool) -> Option<RealmTarget> {
     let realm = info.pointer("/node/realm_id").and_then(Value::as_str)?;
     Some(RealmTarget {
         origin: origin.to_string(),
+        api_base_url: api_base.to_string(),
         realm: Some(realm.to_string()),
         api_version: info
             .get("api_version")
@@ -269,11 +278,13 @@ mod tests {
             "node": {"status": "available", "realm_id": "r-1"},
             "api_version": "3.0.0",
         });
-        let found = target("https://aruna.example", &info, true).expect("an aruna node");
+        let api = api_of("https://api.example/api/v1/info");
+        let found = target("https://aruna.example", api, &info, true).expect("an aruna node");
         assert_eq!(found.realm.as_deref(), Some("r-1"));
+        assert_eq!(found.api_base_url, "https://api.example/api/v1");
         assert_eq!(found.api_version.as_deref(), Some("3.0.0"));
         assert!(found.portal);
-        assert!(target("https://aruna.example", &json!({"ok": true}), true).is_none());
+        assert!(target("https://aruna.example", api, &json!({"ok": true}), true).is_none());
     }
 
     #[test]
