@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import * as api from '../lib/api'
-import { refresh, report, status } from '../lib/store'
+import { openPortal, portals, refresh, refreshPortals, report, status, tab } from '../lib/store'
 import type { HealthReport, LogLine, NodeState } from '../lib/types'
 
 const POLL_MS = 1500
@@ -25,6 +25,9 @@ const labels: Record<NodeState, string> = {
 
 const label = computed(() => labels[status.value.state])
 const live = computed(() => status.value.state === 'running')
+const portalUrl = computed(() =>
+  portals.value.chosen === 'local' ? portals.value.local : portals.value.remote,
+)
 
 async function poll() {
   try {
@@ -51,6 +54,10 @@ async function act(action: () => Promise<unknown>) {
   }
 }
 
+// The local portal only becomes an option once the node is up, so the offer
+// follows the supervisor rather than the poll.
+watch(() => status.value.state, () => void refreshPortals().catch(report))
+
 onMounted(() => {
   void poll()
   timer = window.setInterval(poll, POLL_MS)
@@ -76,8 +83,14 @@ onUnmounted(() => {
       <button :disabled="busy" @click="act(api.nodeStart)">Start</button>
       <button :disabled="busy" @click="act(api.nodeStop)">Stop</button>
       <button :disabled="busy" @click="act(api.nodeRestart)">Restart</button>
-      <button :disabled="!live" @click="act(api.portalOpen)">Open portal</button>
+      <button @click="openPortal()">Open portal</button>
+      <button class="link" @click="tab = 'welcome'">Change realm</button>
     </div>
+    <p class="muted">
+      The portal button opens
+      <span class="mono">{{ portalUrl ?? 'no portal yet' }}</span
+      >{{ portals.chosen === 'local' ? ', served by this node.' : '.' }}
+    </p>
   </section>
 
   <section class="panel">

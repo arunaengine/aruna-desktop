@@ -7,6 +7,9 @@ import type {
   NodeSettings,
   NodeStatus,
   Paths,
+  PortalOptions,
+  PortalPlan,
+  PortalTarget,
   RealmTarget,
 } from './types'
 
@@ -29,4 +32,6 @@ export const enrollPaste = (text: string, seed: string, realm: string) =>
 export const enrollPoll = () => invoke<EnrollProgress>('enroll_poll')
 
 export const realmConnect = (address: string) => invoke<RealmTarget>('realm_connect', { address })
-export const portalOpen = () => invoke<void>('portal_open')
+export const portalOptions = () => invoke<PortalOptions>('portal_options')
+export const portalOpen = (target?: PortalTarget) =>
+  invoke<PortalPlan>('portal_open', { target: target ?? null })

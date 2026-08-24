@@ -1,9 +1,23 @@
 import { ref } from 'vue'
 import { listen } from '@tauri-apps/api/event'
 import * as api from './api'
-import type { EnrollInvite, EnrollProgress, NodeStatus } from './types'
+import type {
+  EnrollInvite,
+  EnrollProgress,
+  NodeStatus,
+  PortalOptions,
+  PortalTarget,
+} from './types'
 
-export type Tab = 'welcome' | 'status' | 'enroll' | 'settings'
+export type Tab = 'welcome' | 'portal' | 'status' | 'enroll' | 'settings'
+
+// Why a portal window did not open, kept for the in-app error page.
+export interface PortalIssue {
+  target: PortalTarget
+  url: string
+  reason: string
+  options: PortalOptions
+}
 
 const idle: NodeStatus = {
   state: 'stopped',
@@ -26,6 +40,8 @@ export const notice = ref('')
 export const invite = ref<EnrollInvite | null>(null)
 export const progress = ref<EnrollProgress>(unenrolled)
 export const realm = ref<string | null>(null)
+export const portals = ref<PortalOptions>({ remote: null, local: null, chosen: null })
+export const portalIssue = ref<PortalIssue | null>(null)
 export const tab = ref<Tab>('status')
 
 export function report(error: unknown) {
@@ -34,6 +50,34 @@ export function report(error: unknown) {
 
 export async function refresh() {
   status.value = await api.nodeStatus()
+}
+
+export async function refreshPortals() {
+  portals.value = await api.portalOptions()
+}
+
+// Opens a portal window, or lands on the in-app error page: a target that
+// refuses the connection must never show the webview's own failure.
+export async function openPortal(target?: PortalTarget) {
+  try {
+    await refreshPortals()
+    const plan = await api.portalOpen(target)
+    portalIssue.value = null
+    if (tab.value === 'portal') {
+      tab.value = 'status'
+    }
+    return plan
+  } catch (error) {
+    const wanted = target ?? portals.value.chosen ?? 'remote'
+    portalIssue.value = {
+      target: wanted,
+      url: (wanted === 'local' ? portals.value.local : portals.value.remote) ?? 'not configured',
+      reason: error instanceof Error ? error.message : String(error),
+      options: portals.value,
+    }
+    tab.value = 'portal'
+    return null
+  }
 }
 
 // Folds one observation round into the view; the backend owns the transitions.
@@ -55,6 +99,7 @@ export async function boot() {
   await refresh()
   await advance()
   realm.value = (await api.settingsGet()).realmUrl
+  await refreshPortals()
   invite.value = await api.enrollPending()
   if (invite.value) {
     tab.value = 'enroll'

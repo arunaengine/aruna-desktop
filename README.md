@@ -5,11 +5,29 @@ machine and gives them a native control surface for it.
 
 The app is not a second portal. It owns two windows:
 
-* the **control window** (the Vue frontend in `src/`) for node status, device
-  enrollment, and settings, and
-* the **portal window**, which navigates to the node's own portal listener at
-  `http://127.0.0.1:34115` as a top-level window. The node sends
-  `frame-ancestors 'none'`, so the portal is never embedded in an iframe.
+* the **control window** (the Vue frontend in `src/`) for the realm connection,
+  node status, device enrollment, and settings, and
+* the **portal window**, which navigates to a portal as a top-level window.
+  Portals send `frame-ancestors 'none'`, so one is never embedded in an iframe.
+
+## Portal window
+
+The portal window has two possible targets:
+
+| Target | Address | Chosen when |
+| --- | --- | --- |
+| the realm | the remembered realm origin | by default |
+| this node | `http://127.0.0.1:34115` | the owner ticks the offline portal in the settings, or picks it after the realm turned out to be unreachable |
+
+The local portal counts as usable only while the node is enrolled, ready, and
+configured with a portal directory. The app never switches targets on its own:
+an unreachable realm **offers** the local portal, it does not fall back to it.
+
+Every open probes its target first (`src-tauri/src/realm.rs`), because
+WebKitGTK, and therefore Tauri, reports no page-load failure the app could hook.
+A refused connection, a rejected certificate, an unresolvable host or an origin
+that serves no Aruna node becomes an in-app error page with the reason and a
+retry, never the webview's own failure page.
 
 ## Sidecar model
 
@@ -80,6 +98,10 @@ The `aruna` scheme is registered by the app (`tauri-plugin-deep-link`), and
 | --- | --- |
 | `aruna://enroll?secret=…&seed=…&realm=…` | the invitation is stashed in the backend and the enroll view opens |
 | `aruna://auth/callback?…` | the query is forwarded to the portal window, which owns the OIDC exchange |
+
+The callback is sent to the origin the portal window is currently showing, so a
+login redirect follows the portal it was started from. It is dropped when no
+portal window is open.
 
 Both accept the authority-less form (`aruna:enroll?…`) as well. Unknown routes
 are dropped with a warning that names the route only, never the query.

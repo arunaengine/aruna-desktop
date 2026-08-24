@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import * as api from '../lib/api'
-import { report } from '../lib/store'
+import { realm, report, tab } from '../lib/store'
 import type { NodeSettings, Paths } from '../lib/types'
 
 interface Form {
@@ -16,6 +16,7 @@ interface Form {
   s3Enabled: boolean
   graceSecs: number
   autoStart: boolean
+  preferLocalPortal: boolean
 }
 
 const form = ref<Form | null>(null)
@@ -36,6 +37,7 @@ function fill(settings: NodeSettings): Form {
     s3Enabled: settings.s3Enabled,
     graceSecs: settings.shutdownGraceSecs,
     autoStart: settings.autoStart,
+    preferLocalPortal: settings.preferLocalPortal,
   }
 }
 
@@ -60,6 +62,7 @@ function drain(base: NodeSettings, edited: Form): NodeSettings {
     s3Enabled: edited.s3Enabled,
     shutdownGraceSecs: Number(edited.graceSecs),
     autoStart: edited.autoStart,
+    preferLocalPortal: edited.preferLocalPortal,
   }
 }
 
@@ -111,6 +114,21 @@ onMounted(async () => {
       Portal directory
       <input v-model="form.portalDir" placeholder="portal listener disabled" spellcheck="false" />
     </label>
+  </section>
+
+  <section v-if="form" class="panel">
+    <h2>Portal</h2>
+    <dl class="grid">
+      <dt>Realm</dt>
+      <dd class="mono">{{ realm ?? 'none connected yet' }}</dd>
+    </dl>
+    <label class="check">
+      <input v-model="form.preferLocalPortal" type="checkbox" />
+      Open the local portal (offline) while this node serves one
+    </label>
+    <div class="row">
+      <button class="link" @click="tab = 'welcome'">Change realm</button>
+    </div>
   </section>
 
   <section v-if="form" class="panel">

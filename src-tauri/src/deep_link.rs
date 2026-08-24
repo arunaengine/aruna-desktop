@@ -167,9 +167,13 @@ fn non_empty(value: &str) -> Option<String> {
 }
 
 /// The OIDC redirect belongs to the portal origin, so the callback is handed to
-/// the portal window rather than handled here.
+/// the portal window rather than handled here. The origin comes from the window
+/// itself: the login was started there, whichever portal it is showing.
 fn forward_auth(app: &AppHandle, url: &Url) {
-    let base = app.state::<AppState>().settings().portal_url();
+    let Some(base) = windows::portal_origin(app) else {
+        tracing::warn!("Dropping an auth callback with no portal window open");
+        return;
+    };
     // TODO(aruna): the portal's callback path comes from the website auth seam;
     // this mirrors the loopback redirect URI registered with the provider.
     let path = match url.query() {

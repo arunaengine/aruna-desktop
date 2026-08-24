@@ -3,6 +3,7 @@ mod deep_link;
 mod enroll;
 mod error;
 mod node;
+mod portal;
 mod realm;
 mod settings;
 mod state;
@@ -78,6 +79,7 @@ pub fn run() {
             commands::enroll_poll,
             commands::realm_connect,
             commands::portal_open,
+            commands::portal_options,
         ])
         .run(tauri::generate_context!())
         .expect("failed to start the Aruna Desktop app")

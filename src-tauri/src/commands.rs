@@ -4,6 +4,7 @@ use crate::deep_link::{self, EnrollInvite, EnrollLink};
 use crate::enroll::{self, EnrollPhase, EnrollProgress, Observed};
 use crate::error::DesktopError;
 use crate::node::{self, HealthReport, LogPage, NodeState, NodeStatus};
+use crate::portal::{self, PortalOptions, PortalPlan, PortalTarget};
 use crate::realm::{self, RealmTarget};
 use crate::settings::NodeSettings;
 use crate::state::{AppState, Paths};
@@ -206,7 +207,35 @@ pub async fn realm_connect(
     Ok(target)
 }
 
+/// Reports which portals can be opened right now, so a view can name its target
+/// and an unreachable one can offer the other.
 #[tauri::command]
-pub fn portal_open(app: AppHandle, state: State<'_, AppState>) -> Result<(), DesktopError> {
-    windows::open_portal(&app, &state.settings().portal_url(), None)
+pub async fn portal_options(state: State<'_, AppState>) -> Result<PortalOptions, DesktopError> {
+    let settings = state.settings();
+    Ok(portal::options(&settings, ready(&state, &settings).await))
+}
+
+/// Opens a portal window, defaulting to the remembered realm. The target is
+/// probed first: a refused or foreign address becomes an error the control
+/// window can explain, never a raw webview failure page.
+#[tauri::command]
+pub async fn portal_open(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    target: Option<PortalTarget>,
+) -> Result<PortalPlan, DesktopError> {
+    let settings = state.settings();
+    let plan = portal::plan(&settings, ready(&state, &settings).await, target)?;
+    realm::check(&state.http, &plan.url)
+        .await
+        .map_err(|reach| DesktopError::Unreachable(reach.message(&plan.url)))?;
+    windows::open_portal(&app, &plan.url, None)?;
+    Ok(plan)
+}
+
+/// Whether the embedded node can serve anything at all. The probe is skipped
+/// while the supervisor knows the node is not running.
+async fn ready(state: &AppState, settings: &NodeSettings) -> bool {
+    state.supervisor.status().state == NodeState::Running
+        && node::probe(&state.http, settings.ports.ops).await.ready.ok
 }

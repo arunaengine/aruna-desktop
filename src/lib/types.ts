@@ -63,6 +63,7 @@ export interface NodeSettings {
   realm: string | null
   realmUrl: string | null
   enrolled: boolean
+  preferLocalPortal: boolean
   autoStart: boolean
   extraEnv: Record<string, string>
 }
@@ -72,6 +73,19 @@ export interface Paths {
   dataDir: string
   storageDir: string
   envFile: string
+}
+
+export type PortalTarget = 'remote' | 'local'
+
+export interface PortalPlan {
+  target: PortalTarget
+  url: string
+}
+
+export interface PortalOptions {
+  remote: string | null
+  local: string | null
+  chosen: PortalTarget | null
 }
 
 export interface RealmTarget {

@@ -71,6 +71,9 @@ pub struct NodeSettings {
     pub realm_url: Option<String>,
     /// Set once the realm has listed this node, so the app opens on status.
     pub enrolled: bool,
+    /// Opens the node's own portal instead of the realm's while it can serve
+    /// one. Never set by the app: switching targets stays the owner's call.
+    pub prefer_local_portal: bool,
     pub auto_start: bool,
     /// Escape hatch for node keys the desktop does not model yet.
     pub extra_env: BTreeMap<String, String>,
@@ -90,6 +93,7 @@ impl Default for NodeSettings {
             realm: None,
             realm_url: None,
             enrolled: false,
+            prefer_local_portal: false,
             auto_start: false,
             extra_env: BTreeMap::new(),
         }

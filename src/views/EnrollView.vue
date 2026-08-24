@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import * as api from '../lib/api'
-import { advance, invite, progress, report, tab } from '../lib/store'
+import { advance, invite, openPortal, progress, report, tab } from '../lib/store'
 import type { EnrollPhase, LogLine } from '../lib/types'
 
 const POLL_MS = 1500
@@ -13,7 +13,6 @@ const realm = ref('')
 const busy = ref(false)
 const lines = ref<LogLine[]>([])
 const cursor = ref(0)
-const portalDir = ref<string | null>(null)
 const again = ref(false)
 let timer: number | undefined
 
@@ -96,25 +95,10 @@ async function run(action: () => Promise<unknown>) {
   }
 }
 
-async function open() {
-  try {
-    await api.portalOpen()
-  } catch (error) {
-    report(error)
-  }
-}
-
 const accept = () => run(api.enrollAccept)
 const paste = () => run(() => api.enrollPaste(text.value, seed.value, realm.value))
 
-// The portal window only has something to show while the node serves the
-// portal artifact, so the offer follows that setting.
-onMounted(async () => {
-  try {
-    portalDir.value = (await api.settingsGet()).portalDir
-  } catch (error) {
-    report(error)
-  }
+onMounted(() => {
   void poll()
   timer = window.setInterval(poll, POLL_MS)
 })
@@ -151,14 +135,10 @@ onUnmounted(() => {
       The one-time secret is spent and has been cleared.
     </p>
     <div class="row">
-      <button :disabled="!portalDir" @click="open">Open the realm portal</button>
+      <button @click="openPortal()">Open the realm portal</button>
       <button @click="tab = 'status'">Go to status</button>
       <button class="link" @click="again = true">Enroll again</button>
     </div>
-    <p v-if="!portalDir" class="muted">
-      Set a portal directory in the settings view to serve the realm portal from
-      this node.
-    </p>
   </section>
 
   <section v-if="running && !done" class="panel">

@@ -14,9 +14,17 @@ pub fn focus_main(app: &AppHandle) {
     }
 }
 
-/// Opens the node's own portal listener in a second window. The node sends
-/// `frame-ancestors 'none'`, so the portal is always a top-level window and
-/// never an iframe inside the control window.
+/// The origin the portal window is showing, so a redirect follows the login it
+/// belongs to instead of whatever the settings would pick.
+pub fn portal_origin(app: &AppHandle) -> Option<String> {
+    let window = app.get_webview_window(PORTAL_LABEL)?;
+    let url = window.url().ok()?;
+    Some(url.origin().ascii_serialization())
+}
+
+/// Opens a portal in a second window. Portals send `frame-ancestors 'none'`, so
+/// a portal is always a top-level window and never an iframe inside the control
+/// window.
 pub fn open_portal(app: &AppHandle, base: &str, path: Option<&str>) -> Result<(), DesktopError> {
     let target = Url::parse(&format!("{base}{}", path.unwrap_or("/")))
         .map_err(|error| DesktopError::DeepLink(error.to_string()))?;
