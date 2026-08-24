@@ -94,6 +94,7 @@ reports as a missing bridge half rather than a failed call.
 | `pick_directory` | `{title?, startPath?}` | the chosen path, or `null` |
 | `open_external` | `{url}` | – |
 | `validate_realm` | `{input}` | `{origin, realm, apiVersion, portal}` |
+| `enroll_invite_last` | – | the last `enroll-invite` payload, or `null` |
 
 Notes on the ones that do more than they say:
 
@@ -119,6 +120,10 @@ Notes on the ones that do more than they say:
   talks to until a node of this device's own is running.
 * `open_external` opens `http` and `https` in the system browser and refuses
   every other scheme.
+* `enroll_invite_last` answers with the last `enroll-invite` payload the shell
+  emitted, in exactly the shape it was emitted, and never carries the secret. It
+  is how a portal that subscribed after a cold-start link still sees it. A wipe
+  clears it.
 
 ## The portal artifact
 
@@ -266,9 +271,9 @@ stashing it for a second confirmation.
 { "seed": "https://seed.example", "realm": "r-1", "applied": true, "error": null }
 ```
 
-The secret is never part of it. The event is a **hint**, not the source of
-truth: a link followed into a cold start can deliver it before the portal is
-listening, which is why the window also navigates to `/app/device`, where
+The secret is never part of it. A link followed into a cold start can deliver
+the event before the portal is listening, so the same payload stays behind
+`enroll_invite_last`, and the window also navigates to `/app/device`, where
 `node_status` reports the same enrollment either way.
 
 ## Enrollment

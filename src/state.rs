@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex};
 
 use tauri::{AppHandle, Manager};
 
+use crate::deep_link::LastInvite;
 use crate::enroll::{EnrollProgress, Tracker};
 use crate::error::DesktopError;
 use crate::node::Supervisor;
@@ -16,6 +17,8 @@ pub struct AppState {
     pub supervisor: Supervisor,
     pub http: reqwest::Client,
     pub enroll: Mutex<Tracker>,
+    /// The last `aruna://enroll` outcome, for a portal that missed its event.
+    pub invite: LastInvite,
     /// The app window and the context its webview was opened with.
     pub shell: Mutex<Shell>,
 }
@@ -51,6 +54,7 @@ impl AppState {
             supervisor,
             http: reqwest::Client::new(),
             enroll: Mutex::new(tracker),
+            invite: LastInvite::default(),
             shell: Mutex::new(Shell::new(context)),
         })
     }

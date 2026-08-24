@@ -12,7 +12,7 @@ use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_opener::OpenerExt;
 use tokio::sync::oneshot;
 
-use crate::deep_link::EnrollLink;
+use crate::deep_link::{EnrollInvite, EnrollLink};
 use crate::enroll::{EnrollPhase, Observed};
 use crate::error::DesktopError;
 use crate::node::{self, NodeInfo, NodeState, NodeStatus};
@@ -23,7 +23,7 @@ use crate::state::AppState;
 
 /// Every command this shell answers. A name that is not here is rejected as
 /// unknown, which the portal reads as a bridge missing that half.
-pub const KNOWN: [&str; 9] = [
+pub const KNOWN: [&str; 10] = [
     "node_status",
     "node_logs_tail",
     "node_settings_get",
@@ -33,6 +33,7 @@ pub const KNOWN: [&str; 9] = [
     "pick_directory",
     "open_external",
     "validate_realm",
+    "enroll_invite_last",
 ];
 
 /// The phrase `wipe_device` demands back before it destroys anything. The
@@ -208,6 +209,14 @@ pub async fn arm(
     })
 }
 
+/// The last `aruna://enroll` outcome, exactly as it was emitted, or `null` when
+/// the app has followed no link. A link followed into a cold start emits its
+/// event before the portal listens, so the payload is kept for the asking.
+#[tauri::command]
+pub fn enroll_invite_last(state: State<'_, AppState>) -> Option<EnrollInvite> {
+    state.invite.last()
+}
+
 /// Checks a realm address the owner typed, remembers it as this device's realm
 /// and answers with the origin the portal will talk to. Remembering is the
 /// point: it is what the shell points the portal at until a node is enrolled.
@@ -256,6 +265,7 @@ pub async fn wipe_device(
     wiped.wipe();
     state.store(wiped)?;
     *state.enroll.lock().expect("enrollment poisoned") = crate::enroll::Tracker::default();
+    state.invite.clear();
     shell::sync(&app);
     Ok(())
 }

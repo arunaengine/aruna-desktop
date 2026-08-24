@@ -52,6 +52,7 @@ pub fn run() {
             bridge::pick_directory,
             bridge::open_external,
             bridge::validate_realm,
+            bridge::enroll_invite_last,
         ]);
     let handler = move |invoke: tauri::ipc::Invoke<tauri::Wry>| {
         let command = invoke.message.command();

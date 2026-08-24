@@ -1,9 +1,10 @@
 use serde::Serialize;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 use url::Url;
 
 use crate::bridge;
 use crate::error::DesktopError;
+use crate::state::AppState;
 use crate::windows;
 
 /// Emitted once an `aruna://enroll` link has been acted on, so the portal can
@@ -42,6 +43,27 @@ pub struct EnrollInvite {
     /// False when the enrollment could not be armed; `error` says why.
     pub applied: bool,
     pub error: Option<String>,
+}
+
+/// Keeps the last invitation the app acted on. A link followed into a cold
+/// start emits its event before the portal is listening, so the same payload
+/// stays here for the portal to ask for once it is.
+#[derive(Debug, Default)]
+pub struct LastInvite(std::sync::Mutex<Option<EnrollInvite>>);
+
+impl LastInvite {
+    pub fn remember(&self, invite: EnrollInvite) {
+        *self.0.lock().expect("last invite poisoned") = Some(invite);
+    }
+
+    pub fn last(&self) -> Option<EnrollInvite> {
+        self.0.lock().expect("last invite poisoned").clone()
+    }
+
+    /// A wiped device has no invitation behind it any more.
+    pub fn clear(&self) {
+        *self.0.lock().expect("last invite poisoned") = None;
+    }
 }
 
 impl EnrollLink {
@@ -135,6 +157,7 @@ fn apply_enroll(app: &AppHandle, url: &Url) {
             applied: joined.is_ok(),
             error: joined.err().map(|error| error.to_string()),
         };
+        app.state::<AppState>().invite.remember(invite.clone());
         if let Err(error) = app.emit(ENROLL_EVENT, invite) {
             tracing::warn!(%error, "Could not emit the enrollment outcome");
         }
@@ -274,6 +297,34 @@ mod tests {
             "/auth/callback#access_token=abc"
         );
         assert_eq!(route("aruna://auth/callback"), "/auth/callback");
+    }
+
+    #[test]
+    fn keeps_the_last_invite() {
+        // A portal that subscribed too late asks for the payload it missed.
+        let kept = LastInvite::default();
+        assert!(kept.last().is_none());
+
+        let invite = EnrollInvite {
+            seed: Some("https://seed.example".into()),
+            realm: Some("r-1".into()),
+            applied: true,
+            error: None,
+        };
+        kept.remember(invite.clone());
+        assert_eq!(kept.last(), Some(invite));
+
+        let refused = EnrollInvite {
+            seed: None,
+            realm: None,
+            applied: false,
+            error: Some("the seed refused the secret".into()),
+        };
+        kept.remember(refused.clone());
+        assert_eq!(kept.last(), Some(refused));
+
+        kept.clear();
+        assert!(kept.last().is_none());
     }
 
     #[test]
