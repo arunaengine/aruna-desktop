@@ -8,6 +8,7 @@ mod portal;
 mod realm;
 mod route;
 mod settings;
+mod shell;
 mod state;
 #[cfg(target_os = "linux")]
 mod wayland;
@@ -51,7 +52,9 @@ pub fn run() {
             let state = AppState::build(&handle)?;
             let settings = state.settings();
             let auto_start = settings.auto_start && !settings.paused;
+            let context = state.shell.lock().expect("shell poisoned").context.clone();
             app.manage(state);
+            windows::open_main(&handle, windows::MAIN_LABEL, &context, "index.html")?;
 
             // Dev builds carry no installed desktop entry, so the scheme is
             // claimed at runtime where the platform allows it.

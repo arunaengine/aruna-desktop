@@ -17,6 +17,7 @@ use crate::enroll::{EnrollPhase, Observed};
 use crate::error::DesktopError;
 use crate::node::{self, NodeInfo, NodeState, NodeStatus};
 use crate::settings::{LocalSettings, NodeSettings, SettingsPatch};
+use crate::shell;
 use crate::state::AppState;
 
 /// The phrase `wipe_device` demands back before it destroys anything. The
@@ -72,7 +73,10 @@ pub struct EnrollResult {
 
 /// Supervisor state of the embedded node, and the enrollment it is finishing.
 #[tauri::command]
-pub async fn node_status(state: State<'_, AppState>) -> Result<DeviceStatus, DesktopError> {
+pub async fn node_status(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<DeviceStatus, DesktopError> {
     let node = state.supervisor.status();
     let seen = match node.state {
         NodeState::Running => Some(look(&state).await),
@@ -80,6 +84,7 @@ pub async fn node_status(state: State<'_, AppState>) -> Result<DeviceStatus, Des
     };
     let joining = settle(&state, &node, seen.as_ref()).await?;
 
+    shell::sync(&app);
     let settings = state.settings();
     let info = seen.map(|seen| seen.info).unwrap_or_default();
     Ok(DeviceStatus {
@@ -111,6 +116,7 @@ pub fn node_settings_get(state: State<'_, AppState>) -> LocalSettings {
 /// node and resuming starts it; the rest reaches the node on its next start.
 #[tauri::command]
 pub async fn node_settings_set(
+    app: AppHandle,
     state: State<'_, AppState>,
     settings: SettingsPatch,
 ) -> Result<LocalSettings, DesktopError> {
@@ -133,6 +139,7 @@ pub async fn node_settings_set(
         }
         None => {}
     }
+    shell::sync(&app);
     Ok(state.settings().local(&state.data_dir))
 }
 
@@ -142,6 +149,7 @@ pub async fn node_settings_set(
 /// and the desktop keeps its own copy of both only to watch the join.
 #[tauri::command]
 pub async fn enroll_apply(
+    app: AppHandle,
     state: State<'_, AppState>,
     secret: String,
     seed_url: Option<String>,
@@ -167,6 +175,7 @@ pub async fn enroll_apply(
         tracker.cursor = 0;
     }
     state.supervisor.restart().await?;
+    shell::sync(&app);
 
     Ok(EnrollResult {
         node_id: None,
@@ -178,7 +187,11 @@ pub async fn enroll_apply(
 /// it is deleted, and the enrollment is forgotten. The node's own REST wipe is
 /// a separate surface; this one is about what lives on this machine.
 #[tauri::command]
-pub async fn wipe_device(state: State<'_, AppState>, confirm: String) -> Result<(), DesktopError> {
+pub async fn wipe_device(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    confirm: String,
+) -> Result<(), DesktopError> {
     if !confirm.trim().eq_ignore_ascii_case(WIPE_PHRASE) {
         return Err(DesktopError::Settings(format!(
             "type {WIPE_PHRASE} to confirm the wipe"
@@ -196,8 +209,8 @@ pub async fn wipe_device(state: State<'_, AppState>, confirm: String) -> Result<
     let mut wiped = settings;
     wiped.wipe();
     state.store(wiped)?;
-    let mut tracker = state.enroll.lock().expect("enrollment poisoned");
-    *tracker = crate::enroll::Tracker::default();
+    *state.enroll.lock().expect("enrollment poisoned") = crate::enroll::Tracker::default();
+    shell::sync(&app);
     Ok(())
 }
 

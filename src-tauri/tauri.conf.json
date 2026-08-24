@@ -10,24 +10,17 @@
     "frontendDist": "../dist"
   },
   "app": {
-    "windows": [
-      {
-        "label": "main",
-        "title": "Aruna Desktop",
-        "width": 980,
-        "height": 720,
-        "minWidth": 720,
-        "minHeight": 520
-      }
-    ],
+    "windows": [],
     "security": {
-      "csp": "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'"
+      "csp": "default-src 'self'; base-uri 'self'; object-src 'none'; frame-src blob:; frame-ancestors 'none'; form-action 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob: https:; font-src 'self' data: https://fonts.gstatic.com; connect-src 'self' ipc: http://ipc.localhost https: http://127.0.0.1:* http://localhost:*"
     }
   },
   "plugins": {
     "deep-link": {
       "desktop": {
-        "schemes": ["aruna"]
+        "schemes": [
+          "aruna"
+        ]
       }
     }
   },

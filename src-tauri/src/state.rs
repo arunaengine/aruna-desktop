@@ -9,6 +9,7 @@ use crate::enroll::{EnrollProgress, Tracker};
 use crate::error::DesktopError;
 use crate::node::Supervisor;
 use crate::settings::NodeSettings;
+use crate::shell::{self, Shell};
 
 /// Paths the settings view shows so the owner can find the node's data.
 #[derive(Clone, Debug, Serialize)]
@@ -30,6 +31,8 @@ pub struct AppState {
     /// carries the one-time secret, so it never leaves the backend.
     pub pending: Mutex<Option<EnrollLink>>,
     pub enroll: Mutex<Tracker>,
+    /// The app window and the context its webview was opened with.
+    pub shell: Mutex<Shell>,
 }
 
 impl AppState {
@@ -47,6 +50,7 @@ impl AppState {
                 .settle(stored.seed_url.clone(), stored.realm.clone());
         }
 
+        let context = shell::context(&stored, false);
         let settings = Arc::new(Mutex::new(stored));
         let supervisor = Supervisor::new(
             app.clone(),
@@ -63,7 +67,12 @@ impl AppState {
             http: reqwest::Client::new(),
             pending: Mutex::new(None),
             enroll: Mutex::new(tracker),
+            shell: Mutex::new(Shell::new(context)),
         })
+    }
+
+    pub fn main_label(&self) -> String {
+        self.shell.lock().expect("shell poisoned").label.clone()
     }
 
     pub fn settings(&self) -> NodeSettings {
