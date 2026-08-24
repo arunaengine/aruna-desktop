@@ -17,6 +17,16 @@ pub const P2P_PORT: u16 = 34119;
 /// Dev override for the node binary, checked before the bundled sidecar.
 pub const NODE_BIN_ENV: &str = "ARUNA_DESKTOP_NODE_BIN";
 
+/// Origins the app window can carry. Tauri serves the portal from its own
+/// scheme, which is `tauri://localhost` everywhere except Windows and Android;
+/// a dev run serves it from the website's vite server instead. The node must
+/// allow all of them, or the portal's own API calls are refused.
+const APP_ORIGINS: [&str; 3] = [
+    "tauri://localhost",
+    "http://tauri.localhost",
+    "http://localhost:1420",
+];
+
 /// The node refuses a shorter grace and falls back to its own default.
 pub const MIN_GRACE_SECS: u64 = 16;
 
@@ -96,14 +106,11 @@ pub struct NodeSettings {
     pub seed_url: Option<String>,
     /// The realm the enrollment link named, for display and the realm poll.
     pub realm: Option<String>,
-    /// The remembered realm portal origin. Its presence is what makes the app
-    /// open on status instead of the welcome landing.
+    /// The realm origin the owner connected to. It is what the portal talks to
+    /// while no node of this device's own is running.
     pub realm_url: Option<String>,
-    /// Set once the realm has listed this node, so the app opens on status.
+    /// Set once the realm has listed this node.
     pub enrolled: bool,
-    /// Opens the node's own portal instead of the realm's while it can serve
-    /// one. Never set by the app: switching targets stays the owner's call.
-    pub prefer_local_portal: bool,
     pub auto_start: bool,
     /// Escape hatch for node keys the desktop does not model yet.
     pub extra_env: BTreeMap<String, String>,
@@ -126,7 +133,6 @@ impl Default for NodeSettings {
             realm: None,
             realm_url: None,
             enrolled: false,
-            prefer_local_portal: false,
             auto_start: false,
             extra_env: BTreeMap::new(),
         }
@@ -271,6 +277,14 @@ impl NodeSettings {
         format!("http://127.0.0.1:{}", self.ports.portal)
     }
 
+    /// Every origin the node has to answer: the app window in each of its
+    /// forms, and the node's own portal listener.
+    pub fn allowed_origins(&self) -> String {
+        let mut origins = APP_ORIGINS.map(str::to_string).to_vec();
+        origins.push(self.portal_url());
+        origins.join(",")
+    }
+
     pub fn api_url(&self) -> String {
         format!("http://127.0.0.1:{}", self.ports.api)
     }
@@ -290,7 +304,7 @@ impl NodeSettings {
                 format!("0.0.0.0:{}", self.ports.p2p),
             ),
             ("API_PUBLIC_URL".to_string(), self.api_url()),
-            ("CORS_ALLOWED_ORIGINS".to_string(), self.portal_url()),
+            ("CORS_ALLOWED_ORIGINS".to_string(), self.allowed_origins()),
             (
                 "ARUNA_SHUTDOWN_GRACE_SECS".to_string(),
                 self.shutdown_grace_secs.to_string(),
@@ -384,7 +398,10 @@ mod tests {
         assert_eq!(map["SOCKET_ADDRESS"], "127.0.0.1:34116");
         assert_eq!(map["OPS_SOCKET_ADDRESS"], "127.0.0.1:34117");
         assert_eq!(map["API_PUBLIC_URL"], "http://127.0.0.1:34116");
-        assert_eq!(map["CORS_ALLOWED_ORIGINS"], "http://127.0.0.1:34115");
+        assert_eq!(
+            map["CORS_ALLOWED_ORIGINS"],
+            "tauri://localhost,http://tauri.localhost,http://localhost:1420,http://127.0.0.1:34115"
+        );
         assert_eq!(map["STORAGE_PATH"], "/data/storage");
         assert_eq!(map["PORTAL_MODE"], "disabled");
         assert!(!map.contains_key("ONBOARDING_SECRET"));
