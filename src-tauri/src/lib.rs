@@ -1,10 +1,13 @@
 mod commands;
+mod deep_link;
 mod error;
 mod node;
 mod settings;
 mod state;
+mod windows;
 
-use tauri::{AppHandle, Manager};
+use tauri::Manager;
+use tauri_plugin_deep_link::DeepLinkExt;
 use tracing_subscriber::EnvFilter;
 
 use crate::state::AppState;
@@ -24,7 +27,7 @@ pub fn run() {
     #[cfg(desktop)]
     {
         builder = builder.plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
-            focus_main(app);
+            windows::focus_main(app);
         }));
     }
 
@@ -33,12 +36,27 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {
-            let state = AppState::build(app.handle())?;
+            let handle = app.handle().clone();
+            let state = AppState::build(&handle)?;
             let auto_start = state.settings().auto_start;
             app.manage(state);
 
+            // Dev builds carry no installed desktop entry, so the scheme is
+            // claimed at runtime where the platform allows it.
+            #[cfg(any(target_os = "linux", windows))]
+            if let Err(error) = app.deep_link().register_all() {
+                tracing::warn!(%error, "Could not register the aruna scheme");
+            }
+
+            let router = handle.clone();
+            app.deep_link().on_open_url(move |event| {
+                for url in event.urls() {
+                    deep_link::handle(&router, url.as_str());
+                }
+            });
+
             if auto_start
-                && let Err(error) = app.state::<AppState>().supervisor.start()
+                && let Err(error) = handle.state::<AppState>().supervisor.start()
             {
                 tracing::warn!(%error, "Could not start the node");
             }
@@ -54,15 +72,10 @@ pub fn run() {
             commands::settings_get,
             commands::settings_save,
             commands::paths_get,
+            commands::enroll_take,
+            commands::enroll_apply,
+            commands::portal_open,
         ])
         .run(tauri::generate_context!())
         .expect("failed to start the Aruna Desktop app")
-}
-
-fn focus_main(app: &AppHandle) {
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.unminimize();
-        let _ = window.show();
-        let _ = window.set_focus();
-    }
 }

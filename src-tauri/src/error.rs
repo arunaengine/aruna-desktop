@@ -16,6 +16,8 @@ pub enum DesktopError {
     Json(#[from] serde_json::Error),
     #[error(transparent)]
     Tauri(#[from] tauri::Error),
+    #[error("invalid deep link: {0}")]
+    DeepLink(String),
 }
 
 impl Serialize for DesktopError {

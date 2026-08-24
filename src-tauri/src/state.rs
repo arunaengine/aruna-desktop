@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex};
 use serde::Serialize;
 use tauri::{AppHandle, Manager};
 
+use crate::deep_link::EnrollPayload;
 use crate::error::DesktopError;
 use crate::node::Supervisor;
 use crate::settings::NodeSettings;
@@ -24,6 +25,8 @@ pub struct AppState {
     pub data_dir: PathBuf,
     pub supervisor: Supervisor,
     pub http: reqwest::Client,
+    /// Payload of the last consumed `aruna://enroll` link, awaiting the view.
+    pub pending: Mutex<Option<EnrollPayload>>,
 }
 
 impl AppState {
@@ -47,6 +50,7 @@ impl AppState {
             data_dir,
             supervisor,
             http: reqwest::Client::new(),
+            pending: Mutex::new(None),
         })
     }
 
