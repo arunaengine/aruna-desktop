@@ -173,6 +173,10 @@ npm install
 ARUNA_DESKTOP_NODE_BIN=/path/to/aruna npm run tauri dev
 ```
 
+On Wayland the app sets `WEBKIT_DISABLE_DMABUF_RENDERER=1` before the webview
+starts, unless that variable or `ARUNA_DESKTOP_NO_WAYLAND_WORKAROUND` is already
+set.
+
 Checks:
 
 ```bash

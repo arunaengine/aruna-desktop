@@ -7,6 +7,8 @@ mod portal;
 mod realm;
 mod settings;
 mod state;
+#[cfg(target_os = "linux")]
+mod wayland;
 mod windows;
 
 use tauri::Manager;
@@ -22,6 +24,9 @@ pub fn run() {
         .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
         .with_writer(std::io::stderr)
         .init();
+
+    #[cfg(target_os = "linux")]
+    wayland::guard();
 
     let mut builder = tauri::Builder::default();
 
