@@ -15,6 +15,19 @@ bridge  ->  node supervisor, settings, enrollment, folder picker, wipe
 node    ->  a supervised aruna child process on loopback
 ```
 
+## Layout
+
+A plain Rust application: the crate is the repository.
+
+```
+Cargo.toml  tauri.conf.json  build.rs      the app
+src/                                       its sources, fallback.html included
+capabilities/                              what the app window may call
+icons/                                     the bundle icon set
+scripts/sync-frontend.sh                   installs the portal into ui/
+ui/                                        the portal artifact (gitignored)
+```
+
 ## The shell context
 
 The shell defines `window.__ARUNA_DESKTOP__` in a Tauri initialization script,
@@ -114,8 +127,8 @@ this repository's own build output, which it is not: it is someone else's build,
 vendored in. Packaged builds bundle exactly what that script installs.
 
 Without it, the build writes a placeholder page naming the command
-(`src-tauri/src/fallback.html`, installed by `build.rs`), so a checkout that has
-never synced a portal still builds and still explains itself.
+(`src/fallback.html`, installed by `build.rs`), so a checkout that never synced
+a portal still builds and still explains itself.
 
 ### Development
 
@@ -128,12 +141,11 @@ Two ways to run it:
 ```bash
 # 1. against the website's dev server, with hot reload
 (cd ../website && npx vite --port 1420 --strictPort)
-ARUNA_DESKTOP_NODE_BIN=/path/to/aruna cargo run --manifest-path src-tauri/Cargo.toml
+ARUNA_DESKTOP_NODE_BIN=/path/to/aruna cargo run
 
 # 2. against the installed artifact, as a packaged build serves it
 scripts/sync-frontend.sh
-ARUNA_DESKTOP_NODE_BIN=/path/to/aruna \
-  cargo run --manifest-path src-tauri/Cargo.toml --release --features custom-protocol
+ARUNA_DESKTOP_NODE_BIN=/path/to/aruna cargo run --release --features custom-protocol
 ```
 
 The `custom-protocol` feature is what embeds `ui/`; without it Tauri loads the
@@ -147,14 +159,23 @@ set.
 Checks:
 
 ```bash
-cargo check --all-targets --manifest-path src-tauri/Cargo.toml
-cargo test --manifest-path src-tauri/Cargo.toml
-cargo +nightly fmt --all --manifest-path src-tauri/Cargo.toml -- --check
+cargo check --all-targets
+cargo test
+cargo +nightly fmt --all -- --check
 ```
+
+Bundling goes through the Tauri CLI, which this repository does not vendor:
+
+```bash
+npx --yes @tauri-apps/cli@2 build      # or: tauri info, tauri dev
+```
+
+The CLI finds the app by looking for `tauri.conf.json`, and finds it at the
+repository root, so no `--config` flag and no `src-tauri` shim is needed.
 
 ## Sidecar model
 
-The node is a **child process**, not a library. `src-tauri/src/node/` resolves a
+The node is a **child process**, not a library. `src/node/` resolves a
 node binary, writes its configuration, starts it, tails its output, restarts it
 after an unexpected exit, and stops it with `SIGTERM` followed by a kill once
 the node's own shutdown grace has passed.

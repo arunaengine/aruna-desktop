@@ -2,7 +2,7 @@ use std::path::Path;
 
 fn main() {
     println!("cargo:rerun-if-changed=src/fallback.html");
-    place_fallback(Path::new("../ui"));
+    place_fallback(Path::new("ui"));
     tauri_build::build()
 }
 

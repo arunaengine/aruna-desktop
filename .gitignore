@@ -1,6 +1,5 @@
 target/
+gen/
 ui/
 .env
 *.local
-src-tauri/target/
-src-tauri/gen/
