@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import * as api from '../lib/api'
-import { advance, invite, progress, report } from '../lib/store'
+import { advance, invite, progress, report, tab } from '../lib/store'
 import type { EnrollPhase, LogLine } from '../lib/types'
 
 const POLL_MS = 1500
@@ -13,6 +13,8 @@ const realm = ref('')
 const busy = ref(false)
 const lines = ref<LogLine[]>([])
 const cursor = ref(0)
+const portalDir = ref<string | null>(null)
+const again = ref(false)
 let timer: number | undefined
 
 // A pasted deep link carries its own seed, so the field is only needed beside
@@ -52,6 +54,7 @@ const rank: Record<EnrollPhase, number> = {
   failed: -1,
 }
 
+const done = computed(() => progress.value.phase === 'done')
 const failed = computed(() => progress.value.phase === 'failed')
 const running = computed(() => progress.value.phase !== 'idle')
 const reached = computed(() => rank[progress.value.phase])
@@ -93,10 +96,25 @@ async function run(action: () => Promise<unknown>) {
   }
 }
 
+async function open() {
+  try {
+    await api.portalOpen()
+  } catch (error) {
+    report(error)
+  }
+}
+
 const accept = () => run(api.enrollAccept)
 const paste = () => run(() => api.enrollPaste(text.value, seed.value, realm.value))
 
-onMounted(() => {
+// The portal window only has something to show while the node serves the
+// portal artifact, so the offer follows that setting.
+onMounted(async () => {
+  try {
+    portalDir.value = (await api.settingsGet()).portalDir
+  } catch (error) {
+    report(error)
+  }
   void poll()
   timer = window.setInterval(poll, POLL_MS)
 })
@@ -126,7 +144,24 @@ onUnmounted(() => {
     </div>
   </section>
 
-  <section v-if="running" class="panel">
+  <section v-if="done" class="panel">
+    <h2>Enrolled</h2>
+    <p>
+      This device belongs to <strong>{{ progress.realm ?? 'the realm' }}</strong>.
+      The one-time secret is spent and has been cleared.
+    </p>
+    <div class="row">
+      <button :disabled="!portalDir" @click="open">Open the realm portal</button>
+      <button @click="tab = 'status'">Go to status</button>
+      <button class="link" @click="again = true">Enroll again</button>
+    </div>
+    <p v-if="!portalDir" class="muted">
+      Set a portal directory in the settings view to serve the realm portal from
+      this node.
+    </p>
+  </section>
+
+  <section v-if="running && !done" class="panel">
     <h2>Enrollment</h2>
     <p v-if="failed" class="failure">{{ progress.detail ?? 'the enrollment failed' }}</p>
     <ol class="steps">
@@ -146,7 +181,7 @@ onUnmounted(() => {
     </p>
   </section>
 
-  <section v-if="running" class="panel">
+  <section v-if="running && !done" class="panel">
     <h2>Node output</h2>
     <p v-if="lines.length === 0" class="muted">No output yet.</p>
     <pre v-else class="log"><span
@@ -157,7 +192,7 @@ onUnmounted(() => {
 </span></pre>
   </section>
 
-  <section class="panel">
+  <section v-if="!done || again" class="panel">
     <h2>Paste an invitation</h2>
     <p class="muted">
       Paste the whole <code>aruna://enroll</code> link from the portal wizard, or
