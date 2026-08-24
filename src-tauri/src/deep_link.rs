@@ -112,8 +112,14 @@ mod tests {
     fn routes_both_forms() {
         assert_eq!(parse("aruna://enroll?secret=x").0, "enroll");
         assert_eq!(parse("aruna:enroll?secret=x").0, "enroll");
-        assert_eq!(parse("aruna://auth/callback?code=x"), ("auth".into(), "callback".into()));
-        assert_eq!(parse("aruna:auth/callback?code=x"), ("auth".into(), "callback".into()));
+        assert_eq!(
+            parse("aruna://auth/callback?code=x"),
+            ("auth".into(), "callback".into())
+        );
+        assert_eq!(
+            parse("aruna:auth/callback?code=x"),
+            ("auth".into(), "callback".into())
+        );
     }
 
     #[test]

@@ -55,9 +55,7 @@ pub fn run() {
                 }
             });
 
-            if auto_start
-                && let Err(error) = handle.state::<AppState>().supervisor.start()
-            {
+            if auto_start && let Err(error) = handle.state::<AppState>().supervisor.start() {
                 tracing::warn!(%error, "Could not start the node");
             }
             Ok(())

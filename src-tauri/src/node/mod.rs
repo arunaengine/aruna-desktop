@@ -91,13 +91,23 @@ impl Supervisor {
     }
 
     pub fn status(&self) -> NodeStatus {
-        self.inner.lock().expect("supervisor poisoned").status.clone()
+        self.inner
+            .lock()
+            .expect("supervisor poisoned")
+            .status
+            .clone()
     }
 
     /// Resolves the binary, writes the node's env file and starts the run loop.
     /// A missing binary leaves a status the status view can explain.
     pub fn start(&self) -> Result<NodeStatus, DesktopError> {
-        if self.inner.lock().expect("supervisor poisoned").task.is_some() {
+        if self
+            .inner
+            .lock()
+            .expect("supervisor poisoned")
+            .task
+            .is_some()
+        {
             return Ok(self.status());
         }
 

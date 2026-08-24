@@ -222,10 +222,7 @@ mod tests {
     use super::*;
 
     fn pairs(settings: &NodeSettings) -> BTreeMap<String, String> {
-        settings
-            .env_pairs(Path::new("/data"))
-            .into_iter()
-            .collect()
+        settings.env_pairs(Path::new("/data")).into_iter().collect()
     }
 
     #[test]
