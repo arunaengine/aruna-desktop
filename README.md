@@ -10,6 +10,46 @@ The app is not a second portal. It owns two windows:
 * the **portal window**, which navigates to a portal as a top-level window.
   Portals send `frame-ancestors 'none'`, so one is never embedded in an iframe.
 
+## First run
+
+1. The app opens on the **welcome landing**, which asks for the address of the
+   realm: a bare host name, a full URL, or a link copied out of a portal.
+2. The backend checks that address before anything is opened. It asks for
+   `/portal-config.json` and then for the node's `/info`, either at the API base
+   the portal names or at `/api/v1/info` and `/info` on the address itself.
+3. The address is remembered and the realm's portal opens in the portal window,
+   where the owner signs in the way they would in any browser.
+
+Enrolling the node on this machine is offered from the landing and stays
+optional: it is what buys offline authoring, a local S3 endpoint, and a portal
+without a network.
+
+A launch lands on:
+
+| State | View |
+| --- | --- |
+| an invitation waiting, or a join still running | enroll |
+| a realm remembered | status |
+| neither | welcome |
+
+Enrolling from a deep link also remembers the seed's origin as the realm, unless
+one is already remembered, so a device onboarded from the portal wizard has
+somewhere to log in without being asked twice.
+
+### The realm address
+
+What the owner types is reduced to an origin, because a portal, its runtime
+config and the API prefix all live at the root of one:
+
+* surrounding whitespace is dropped, and an empty address is refused;
+* `http://` and `https://` are kept as typed, anything else with a scheme is
+  refused, and an address without one is read as `https://`;
+* the host is lowercased and IDNA-encoded, and a default port is dropped, so
+  `ARUNA.Example:443` and `https://aruna.example` are the same realm;
+* path, query and fragment are dropped, so a link to a dataset page still names
+  the realm it came from;
+* an address carrying credentials is refused.
+
 ## Portal window
 
 The portal window has two possible targets:
@@ -124,7 +164,8 @@ enrollment id and the onboarding mode all travel inside the secret itself
 decodes to reach `{seed}/api/v1/onboarding/bootstrap`. There is no seed, realm
 or node-kind environment key to set, and none exists.
 
-The desktop keeps the seed URL and the realm id anyway, because it polls them.
+The desktop keeps the seed URL and the realm id anyway, because it polls them,
+and the seed's origin becomes the remembered realm when none is.
 The secret is stored once, is never sent to the webview, never logged, and is
 cleared from the settings the moment the node serves the realm. It must not be
 cleared earlier: a node whose join is half finished needs it again to resume.

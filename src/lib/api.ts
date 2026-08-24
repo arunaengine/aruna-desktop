@@ -3,6 +3,7 @@ import type {
   EnrollInvite,
   EnrollProgress,
   HealthReport,
+  Landing,
   LogPage,
   NodeSettings,
   NodeStatus,
@@ -12,6 +13,8 @@ import type {
   PortalTarget,
   RealmTarget,
 } from './types'
+
+export const launchRoute = () => invoke<Landing>('launch_route')
 
 export const nodeStatus = () => invoke<NodeStatus>('node_status')
 export const nodeStart = () => invoke<NodeStatus>('node_start')

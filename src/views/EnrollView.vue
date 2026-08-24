@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import * as api from '../lib/api'
-import { advance, invite, openPortal, progress, report, tab } from '../lib/store'
+import { advance, invite, openPortal, progress, report, syncRealm, tab } from '../lib/store'
 import type { EnrollPhase, LogLine } from '../lib/types'
 
 const POLL_MS = 1500
@@ -88,6 +88,7 @@ async function run(action: () => Promise<unknown>) {
   try {
     await action()
     await advance()
+    await syncRealm()
   } catch (error) {
     report(error)
   } finally {

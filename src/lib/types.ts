@@ -75,6 +75,8 @@ export interface Paths {
   envFile: string
 }
 
+export type Landing = 'welcome' | 'status' | 'enroll'
+
 export type PortalTarget = 'remote' | 'local'
 
 export interface PortalPlan {

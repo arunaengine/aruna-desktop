@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import * as api from '../lib/api'
-import { realm, tab } from '../lib/store'
+import { realm, syncRealm, tab } from '../lib/store'
 import type { RealmTarget } from '../lib/types'
 
 const address = ref(realm.value ?? '')
@@ -16,8 +16,8 @@ async function connect() {
   try {
     const found = await api.realmConnect(address.value)
     target.value = found
-    realm.value = found.url
     address.value = found.url
+    await syncRealm()
   } catch (error) {
     failure.value = error instanceof Error ? error.message : String(error)
   } finally {

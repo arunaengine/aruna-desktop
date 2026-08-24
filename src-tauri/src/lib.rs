@@ -5,6 +5,7 @@ mod error;
 mod node;
 mod portal;
 mod realm;
+mod route;
 mod settings;
 mod state;
 #[cfg(target_os = "linux")]
@@ -69,6 +70,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            commands::launch_route,
             commands::node_status,
             commands::node_start,
             commands::node_stop,

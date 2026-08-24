@@ -56,6 +56,13 @@ export async function refreshPortals() {
   portals.value = await api.portalOptions()
 }
 
+// The remembered realm changes on a connect and on an enrollment, and both move
+// what the portal button opens.
+export async function syncRealm() {
+  realm.value = (await api.settingsGet()).realmUrl
+  await refreshPortals()
+}
+
 // Opens a portal window, or lands on the in-app error page: a target that
 // refuses the connection must never show the webview's own failure.
 export async function openPortal(target?: PortalTarget) {
@@ -86,8 +93,8 @@ export async function advance() {
 }
 
 // Subscribes to the backend events and picks up a deep link that arrived
-// before this window was ready. Without a remembered realm the app lands on the
-// welcome view; an arriving invitation still wins.
+// before this window was ready. The backend decides which view that leaves the
+// app on.
 export async function boot() {
   await listen<NodeStatus>('node-status', (event) => {
     status.value = event.payload
@@ -98,12 +105,7 @@ export async function boot() {
   })
   await refresh()
   await advance()
-  realm.value = (await api.settingsGet()).realmUrl
-  await refreshPortals()
+  await syncRealm()
   invite.value = await api.enrollPending()
-  if (invite.value) {
-    tab.value = 'enroll'
-  } else if (!realm.value) {
-    tab.value = 'welcome'
-  }
+  tab.value = await api.launchRoute()
 }

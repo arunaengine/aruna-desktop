@@ -169,8 +169,15 @@ impl NodeSettings {
         self.realm_url = Some(url.to_string());
     }
 
-    /// Arms the next start with an accepted invitation.
+    /// Arms the next start with an accepted invitation. The seed doubles as the
+    /// realm to open when none is remembered yet, so a device enrolled straight
+    /// from a deep link still has a portal to log in to.
     pub fn enroll(&mut self, secret: String, seed: String, realm: Option<String>) {
+        if self.realm_url.is_none()
+            && let Ok(origin) = crate::realm::normalize(&seed)
+        {
+            self.realm_url = Some(origin);
+        }
         self.onboarding_secret = Some(secret);
         self.seed_url = Some(seed);
         self.realm = realm;
@@ -350,6 +357,22 @@ mod tests {
         assert_eq!(merged.realm.as_deref(), Some("r"));
         assert_eq!(merged.seed_url.as_deref(), Some("https://seed.example"));
         assert_eq!(merged.realm_url.as_deref(), Some("https://aruna.example"));
+    }
+
+    #[test]
+    fn remembers_seed_realm() {
+        // A device enrolled from a deep link has no realm address of its own.
+        let mut settings = NodeSettings::default();
+        settings.enroll("s1".into(), "https://seed.example/aruna".into(), None);
+        assert_eq!(settings.realm_url.as_deref(), Some("https://seed.example"));
+
+        let mut connected = NodeSettings::default();
+        connected.remember_realm("https://aruna.example");
+        connected.enroll("s1".into(), "https://seed.example".into(), None);
+        assert_eq!(
+            connected.realm_url.as_deref(),
+            Some("https://aruna.example")
+        );
     }
 
     #[test]

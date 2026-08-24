@@ -6,9 +6,26 @@ use crate::error::DesktopError;
 use crate::node::{self, HealthReport, LogPage, NodeState, NodeStatus};
 use crate::portal::{self, PortalOptions, PortalPlan, PortalTarget};
 use crate::realm::{self, RealmTarget};
+use crate::route::{self, Landing};
 use crate::settings::NodeSettings;
 use crate::state::{AppState, Paths};
 use crate::windows;
+
+/// The view the control window opens on. The backend owns the rule, because it
+/// owns what it depends on: the remembered realm and any waiting invitation.
+#[tauri::command]
+pub fn launch_route(state: State<'_, AppState>) -> Landing {
+    let invited = state
+        .pending
+        .lock()
+        .expect("pending enrollment poisoned")
+        .is_some();
+    route::landing(
+        state.settings().realm_url.as_deref(),
+        invited,
+        state.progress().active(),
+    )
+}
 
 #[tauri::command]
 pub fn node_status(state: State<'_, AppState>) -> NodeStatus {
