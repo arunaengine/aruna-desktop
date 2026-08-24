@@ -18,7 +18,7 @@ const CONFIG_PATH: &str = "/portal-config.json";
 #[derive(Clone, Debug, Default, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct RealmTarget {
-    pub url: String,
+    pub origin: String,
     pub realm: Option<String>,
     pub api_version: Option<String>,
     pub portal: bool,
@@ -151,7 +151,7 @@ fn api_base(origin: &str, raw: &str) -> Option<String> {
 fn target(origin: &str, info: &Value, portal: bool) -> Option<RealmTarget> {
     let realm = info.pointer("/node/realm_id").and_then(Value::as_str)?;
     Some(RealmTarget {
-        url: origin.to_string(),
+        origin: origin.to_string(),
         realm: Some(realm.to_string()),
         api_version: info
             .get("api_version")

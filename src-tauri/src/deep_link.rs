@@ -1,12 +1,13 @@
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter};
 use url::Url;
 
+use crate::bridge;
 use crate::error::DesktopError;
-use crate::state::AppState;
 use crate::windows;
 
-/// Emitted when an `aruna://enroll` link has been stashed for the enroll view.
+/// Emitted once an `aruna://enroll` link has been acted on, so the portal can
+/// show what happened without ever seeing the secret.
 pub const ENROLL_EVENT: &str = "enroll-invite";
 
 /// The scheme registered for this app, matching `tauri.conf.json`.
@@ -25,22 +26,19 @@ pub struct EnrollLink {
     pub realm: Option<String>,
 }
 
-/// The part of an invitation the control window may see.
+/// What the portal is told about an invitation the app followed. The secret is
+/// never part of it: it leaves the backend only as the node's environment.
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct EnrollInvite {
     pub seed: Option<String>,
     pub realm: Option<String>,
+    /// False when the enrollment could not be armed; `error` says why.
+    pub applied: bool,
+    pub error: Option<String>,
 }
 
 impl EnrollLink {
-    pub fn invite(&self) -> EnrollInvite {
-        EnrollInvite {
-            seed: self.seed.clone(),
-            realm: self.realm.clone(),
-        }
-    }
-
     /// Takes an enrollment the portal handed over. Only the secret is required;
     /// a seed URL beside it has to be an absolute web address.
     pub fn accept(
@@ -77,7 +75,7 @@ pub fn handle(app: &AppHandle, raw: &str) {
 
     let (head, tail) = route(&url);
     match (head.as_str(), tail.as_str()) {
-        ("enroll", _) => stash_enroll(app, &url),
+        ("enroll", _) => apply_enroll(app, &url),
         ("auth", "callback") => forward_auth(app, &url),
         _ => tracing::warn!(route = %head, "Ignoring an unknown deep link route"),
     }
@@ -98,7 +96,10 @@ fn route(url: &Url) -> (String, String) {
     }
 }
 
-fn stash_enroll(app: &AppHandle, url: &Url) {
+/// Arms the enrollment the link carries and tells the portal how it went. The
+/// owner already accepted it by following the link out of the portal, so there
+/// is nothing left to confirm here.
+fn apply_enroll(app: &AppHandle, url: &Url) {
     let link = match parse_enroll(url) {
         Ok(link) => link,
         Err(error) => {
@@ -107,13 +108,27 @@ fn stash_enroll(app: &AppHandle, url: &Url) {
             return;
         }
     };
-    let invite = link.invite();
-    let state = app.state::<AppState>();
-    *state.pending.lock().expect("pending enrollment poisoned") = Some(link);
-    if let Err(error) = app.emit(ENROLL_EVENT, invite) {
-        tracing::warn!(%error, "Could not emit the enrollment invitation");
-    }
-    windows::focus_main(app);
+    let seed = link.seed.clone();
+    let realm = link.realm.clone();
+    let app = app.clone();
+    windows::focus_main(&app);
+
+    tauri::async_runtime::spawn(async move {
+        let joined = bridge::arm(&app, link, None).await;
+        let invite = EnrollInvite {
+            seed,
+            realm: joined
+                .as_ref()
+                .ok()
+                .and_then(|joined| joined.realm.clone())
+                .or(realm),
+            applied: joined.is_ok(),
+            error: joined.err().map(|error| error.to_string()),
+        };
+        if let Err(error) = app.emit(ENROLL_EVENT, invite) {
+            tracing::warn!(%error, "Could not emit the enrollment outcome");
+        }
+    });
 }
 
 /// Reads `aruna://enroll?secret=…&seed=…&realm=…`. The secret and the seed are
@@ -140,28 +155,6 @@ pub fn parse_enroll(url: &Url) -> Result<EnrollLink, DesktopError> {
     })
 }
 
-/// The paste fallback: either a whole `aruna://enroll` link, or a bare secret
-/// paired with the seed URL typed beside it.
-pub fn parse_paste(text: &str, seed: &str, realm: &str) -> Result<EnrollLink, DesktopError> {
-    let text = text.trim();
-    if text.is_empty() {
-        return Err(DesktopError::DeepLink("the secret is empty".into()));
-    }
-    if let Some(rest) = strip_scheme(text) {
-        let url = Url::parse(rest)
-            .map_err(|error| DesktopError::DeepLink(format!("unreadable link: {error}")))?;
-        return parse_enroll(&url);
-    }
-    EnrollLink::accept(text.to_string(), non_empty(seed), non_empty(realm))
-}
-
-/// Keeps `Url::parse` from reading a bare secret as an opaque URL, and lets the
-/// authority-less form through unchanged.
-fn strip_scheme(text: &str) -> Option<&str> {
-    let lower = text.to_ascii_lowercase();
-    lower.starts_with("aruna:").then_some(text)
-}
-
 /// The seed must be an absolute HTTP(S) origin; a trailing slash is dropped so
 /// the polled paths can be appended directly.
 fn seed_base(raw: &str) -> Result<String, DesktopError> {
@@ -183,23 +176,28 @@ fn non_empty(value: &str) -> Option<String> {
     (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
 
-/// The OIDC redirect belongs to the portal origin, so the callback is handed to
-/// the portal window rather than handled here. The origin comes from the window
-/// itself: the login was started there, whichever portal it is showing.
+/// The portal owns the OIDC exchange, so the callback is handed to its router:
+/// the app window is sent to the callback route with everything the provider
+/// returned, and the page that already runs there finishes the sign-in.
 fn forward_auth(app: &AppHandle, url: &Url) {
-    let Some(base) = windows::portal_origin(app) else {
-        tracing::warn!("Dropping an auth callback with no portal window open");
-        return;
-    };
-    // TODO(aruna): the portal's callback path comes from the website auth seam;
-    // this mirrors the loopback redirect URI registered with the provider.
-    let path = match url.query() {
-        Some(query) => format!("/auth/callback?{query}"),
-        None => "/auth/callback".to_string(),
-    };
-    if let Err(error) = windows::open_portal(app, &base, Some(&path)) {
+    if let Err(error) = windows::navigate_main(app, &callback_route(url)) {
         tracing::warn!(%error, "Could not forward the auth callback");
     }
+}
+
+/// The portal route an `aruna://auth/callback` link becomes. Both the query and
+/// the fragment are kept: a provider may answer in either.
+fn callback_route(url: &Url) -> String {
+    let mut route = String::from("/auth/callback");
+    if let Some(query) = url.query() {
+        route.push('?');
+        route.push_str(query);
+    }
+    if let Some(fragment) = url.fragment() {
+        route.push('#');
+        route.push_str(fragment);
+    }
+    route
 }
 
 #[cfg(test)]
@@ -256,34 +254,5 @@ mod tests {
     fn rejects_foreign_seed() {
         assert!(enroll("aruna://enroll?secret=s&seed=file%3A%2F%2F%2Fetc%2Fpasswd").is_err());
         assert!(enroll("aruna://enroll?secret=s&seed=seed.example").is_err());
-    }
-
-    #[test]
-    fn pastes_whole_link() {
-        let link = parse_paste(
-            "  aruna://enroll?secret=s1&seed=https%3A%2F%2Fseed.example&realm=r-1  ",
-            "",
-            "",
-        )
-        .expect("a complete link");
-        assert_eq!(link.secret, "s1");
-        assert_eq!(link.realm.as_deref(), Some("r-1"));
-    }
-
-    #[test]
-    fn pastes_bare_secret() {
-        // The seed is optional: the node reads its own copy out of the secret.
-        let link = parse_paste("s1", "https://seed.example/", "r-1").expect("a complete link");
-        assert_eq!(link.secret, "s1");
-        assert_eq!(link.seed.as_deref(), Some("https://seed.example"));
-        assert!(
-            parse_paste("s1", "", "")
-                .expect("a bare secret")
-                .seed
-                .is_none()
-        );
-
-        assert!(parse_paste("  ", "https://seed.example", "").is_err());
-        assert!(parse_paste("s1", "seed.example", "").is_err());
     }
 }

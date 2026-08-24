@@ -175,28 +175,6 @@ impl NodeSettings {
         Ok(())
     }
 
-    /// What the control window is allowed to see. The one-time secret never
-    /// crosses into the webview, so the enroll view cannot echo or leak it.
-    pub fn redacted(&self) -> Self {
-        Self {
-            onboarding_secret: None,
-            ..self.clone()
-        }
-    }
-
-    /// Takes an edit from the settings view. The view never carries the fields
-    /// the enrollment owns, so they are kept from the stored copy.
-    pub fn merge_edits(&self, edited: Self) -> Self {
-        Self {
-            onboarding_secret: self.onboarding_secret.clone(),
-            seed_url: self.seed_url.clone(),
-            realm: self.realm.clone(),
-            realm_url: self.realm_url.clone(),
-            enrolled: self.enrolled,
-            ..edited
-        }
-    }
-
     /// What the portal's local panel shows. The storage path is the effective
     /// one, so an unset default is still a path the owner can see and change.
     pub fn local(&self, data_dir: &Path) -> LocalSettings {
@@ -426,44 +404,6 @@ mod tests {
             ..NodeSettings::default()
         };
         assert_eq!(pairs(&enabled)["S3_HOST"], "127.0.0.1:34118");
-    }
-
-    #[test]
-    fn hides_the_secret() {
-        let mut settings = NodeSettings::default();
-        settings.enroll(
-            "s1".into(),
-            Some("https://seed.example".into()),
-            Some("r".into()),
-        );
-        let shown = settings.redacted();
-        assert!(shown.onboarding_secret.is_none());
-        assert_eq!(shown.seed_url.as_deref(), Some("https://seed.example"));
-        assert_eq!(settings.onboarding_secret.as_deref(), Some("s1"));
-    }
-
-    #[test]
-    fn keeps_enrollment_fields() {
-        // The settings view never sees the secret, so saving must not drop it.
-        let mut stored = NodeSettings::default();
-        stored.enroll(
-            "s1".into(),
-            Some("https://seed.example".into()),
-            Some("r".into()),
-        );
-        stored.remember_realm("https://aruna.example");
-
-        let edited = NodeSettings {
-            auto_start: true,
-            realm_url: None,
-            ..stored.redacted()
-        };
-        let merged = stored.merge_edits(edited);
-        assert!(merged.auto_start);
-        assert_eq!(merged.onboarding_secret.as_deref(), Some("s1"));
-        assert_eq!(merged.realm.as_deref(), Some("r"));
-        assert_eq!(merged.seed_url.as_deref(), Some("https://seed.example"));
-        assert_eq!(merged.realm_url.as_deref(), Some("https://aruna.example"));
     }
 
     #[test]

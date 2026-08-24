@@ -1,12 +1,9 @@
 mod bridge;
-mod commands;
 mod deep_link;
 mod enroll;
 mod error;
 mod node;
-mod portal;
 mod realm;
-mod route;
 mod settings;
 mod shell;
 mod state;
@@ -42,6 +39,30 @@ pub fn run() {
         }));
     }
 
+    // Tauri rejects an unregistered command with its own wording; naming it
+    // "unknown" is what the portal reads as a bridge without that half.
+    let commands: Box<dyn Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Send + Sync> =
+        Box::new(tauri::generate_handler![
+            bridge::node_status,
+            bridge::node_logs_tail,
+            bridge::node_settings_get,
+            bridge::node_settings_set,
+            bridge::enroll_apply,
+            bridge::wipe_device,
+            bridge::pick_directory,
+            bridge::open_external,
+            bridge::validate_realm,
+        ]);
+    let handler = move |invoke: tauri::ipc::Invoke<tauri::Wry>| {
+        let command = invoke.message.command();
+        if !bridge::KNOWN.contains(&command) {
+            let refusal = format!("unknown command: {command}");
+            invoke.resolver.reject(refusal);
+            return true;
+        }
+        commands(invoke)
+    };
+
     builder
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_dialog::init())
@@ -75,32 +96,7 @@ pub fn run() {
             }
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![
-            bridge::node_status,
-            bridge::node_logs_tail,
-            bridge::node_settings_get,
-            bridge::node_settings_set,
-            bridge::enroll_apply,
-            bridge::wipe_device,
-            bridge::pick_directory,
-            bridge::open_external,
-            commands::launch_route,
-            commands::node_start,
-            commands::node_stop,
-            commands::node_restart,
-            commands::node_logs,
-            commands::node_health,
-            commands::settings_get,
-            commands::settings_save,
-            commands::paths_get,
-            commands::enroll_pending,
-            commands::enroll_accept,
-            commands::enroll_paste,
-            commands::enroll_poll,
-            commands::realm_connect,
-            commands::portal_open,
-            commands::portal_options,
-        ])
+        .invoke_handler(handler)
         .run(tauri::generate_context!())
         .expect("failed to start the Aruna Desktop app")
 }

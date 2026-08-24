@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Aruna Desktop</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+      }
+      body {
+        margin: 0;
+        display: grid;
+        place-items: center;
+        min-height: 100vh;
+        background: #f8fafc;
+        color: #0f172a;
+      }
+      main {
+        max-width: 34rem;
+        padding: 2.5rem;
+        text-align: center;
+      }
+      h1 {
+        font-size: 1.25rem;
+        margin: 0 0 0.75rem;
+      }
+      p {
+        margin: 0 0 1rem;
+        line-height: 1.6;
+        color: #475569;
+      }
+      code {
+        display: inline-block;
+        padding: 0.35rem 0.6rem;
+        border-radius: 0.4rem;
+        background: #e2e8f0;
+        font-family: ui-monospace, SFMono-Regular, monospace;
+        font-size: 0.85rem;
+      }
+      @media (prefers-color-scheme: dark) {
+        body {
+          background: #0f172a;
+          color: #e2e8f0;
+        }
+        p {
+          color: #94a3b8;
+        }
+        code {
+          background: #1e293b;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>The portal has not been installed yet</h1>
+      <p>
+        Aruna Desktop hosts the same portal build an Aruna node serves. This
+        copy has none, so there is nothing to show.
+      </p>
+      <p>Install it from the website repository, then start the app again:</p>
+      <p><code>scripts/sync-frontend.sh</code></p>
+    </main>
+  </body>
+</html>

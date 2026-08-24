@@ -1,25 +1,13 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use serde::Serialize;
 use tauri::{AppHandle, Manager};
 
-use crate::deep_link::EnrollLink;
 use crate::enroll::{EnrollProgress, Tracker};
 use crate::error::DesktopError;
 use crate::node::Supervisor;
 use crate::settings::NodeSettings;
 use crate::shell::{self, Shell};
-
-/// Paths the settings view shows so the owner can find the node's data.
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Paths {
-    pub config_file: String,
-    pub data_dir: String,
-    pub storage_dir: String,
-    pub env_file: String,
-}
 
 pub struct AppState {
     pub settings: Arc<Mutex<NodeSettings>>,
@@ -27,9 +15,6 @@ pub struct AppState {
     pub data_dir: PathBuf,
     pub supervisor: Supervisor,
     pub http: reqwest::Client,
-    /// The last `aruna://enroll` link, waiting for the owner to accept it. It
-    /// carries the one-time secret, so it never leaves the backend.
-    pub pending: Mutex<Option<EnrollLink>>,
     pub enroll: Mutex<Tracker>,
     /// The app window and the context its webview was opened with.
     pub shell: Mutex<Shell>,
@@ -65,7 +50,6 @@ impl AppState {
             data_dir,
             supervisor,
             http: reqwest::Client::new(),
-            pending: Mutex::new(None),
             enroll: Mutex::new(tracker),
             shell: Mutex::new(Shell::new(context)),
         })
@@ -93,15 +77,5 @@ impl AppState {
             .expect("enrollment poisoned")
             .progress
             .clone()
-    }
-
-    pub fn paths(&self) -> Paths {
-        let settings = self.settings();
-        Paths {
-            config_file: self.settings_path.display().to_string(),
-            data_dir: self.data_dir.display().to_string(),
-            storage_dir: settings.storage_dir(&self.data_dir).display().to_string(),
-            env_file: self.data_dir.join(".env").display().to_string(),
-        }
     }
 }

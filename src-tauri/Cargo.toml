@@ -16,6 +16,11 @@ crate-type = ["lib", "cdylib", "staticlib"]
 name = "aruna-desktop"
 path = "src/main.rs"
 
+[features]
+# Embeds the portal artifact instead of loading the dev URL. The Tauri CLI turns
+# it on for production builds; a plain `cargo run --release` has to ask for it.
+custom-protocol = ["tauri/custom-protocol"]
+
 [build-dependencies]
 tauri-build = "2.6.3"
 

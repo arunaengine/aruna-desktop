@@ -8,7 +8,6 @@ use crate::shell::{self, ShellContext};
 use crate::state::AppState;
 
 pub const MAIN_LABEL: &str = "main";
-pub const PORTAL_LABEL: &str = "portal";
 
 /// What a fresh window opens on; Tauri reads it as the app root.
 const ROOT: &str = "index.html";
@@ -82,32 +81,16 @@ fn route(url: &Url) -> String {
     route
 }
 
-/// The origin the portal window is showing, so a redirect follows the login it
-/// belongs to instead of whatever the settings would pick.
-pub fn portal_origin(app: &AppHandle) -> Option<String> {
-    let window = app.get_webview_window(PORTAL_LABEL)?;
-    let url = window.url().ok()?;
-    Some(url.origin().ascii_serialization())
-}
-
-/// Opens a portal in a second window. Portals send `frame-ancestors 'none'`, so
-/// a portal is always a top-level window and never an iframe inside the control
-/// window.
-pub fn open_portal(app: &AppHandle, base: &str, path: Option<&str>) -> Result<(), DesktopError> {
-    let target = Url::parse(&format!("{base}{}", path.unwrap_or("/")))
+/// Sends the app window to a route of the portal it is already showing. The
+/// portal is a single-page app, so this is how a deep link reaches its router.
+pub fn navigate_main(app: &AppHandle, path: &str) -> Result<(), DesktopError> {
+    let window = main(app).ok_or(DesktopError::Tauri(tauri::Error::WebviewNotFound))?;
+    let target = window
+        .url()?
+        .join(path)
         .map_err(|error| DesktopError::DeepLink(error.to_string()))?;
-
-    if let Some(window) = app.get_webview_window(PORTAL_LABEL) {
-        window.navigate(target)?;
-        window.set_focus()?;
-        return Ok(());
-    }
-
-    WebviewWindowBuilder::new(app, PORTAL_LABEL, WebviewUrl::External(target))
-        .title("Aruna Portal")
-        .inner_size(1180.0, 820.0)
-        .min_inner_size(820.0, 560.0)
-        .build()?;
+    window.navigate(target)?;
+    focus_main(app);
     Ok(())
 }
 

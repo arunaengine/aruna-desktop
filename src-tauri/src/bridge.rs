@@ -7,7 +7,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_opener::OpenerExt;
 use tokio::sync::oneshot;
@@ -16,9 +16,24 @@ use crate::deep_link::EnrollLink;
 use crate::enroll::{EnrollPhase, Observed};
 use crate::error::DesktopError;
 use crate::node::{self, NodeInfo, NodeState, NodeStatus};
+use crate::realm::{self, RealmTarget};
 use crate::settings::{LocalSettings, NodeSettings, SettingsPatch};
 use crate::shell;
 use crate::state::AppState;
+
+/// Every command this shell answers. A name that is not here is rejected as
+/// unknown, which the portal reads as a bridge missing that half.
+pub const KNOWN: [&str; 9] = [
+    "node_status",
+    "node_logs_tail",
+    "node_settings_get",
+    "node_settings_set",
+    "enroll_apply",
+    "wipe_device",
+    "pick_directory",
+    "open_external",
+    "validate_realm",
+];
 
 /// The phrase `wipe_device` demands back before it destroys anything. The
 /// portal asks for it too; the shell never trusts that it did.
@@ -150,13 +165,23 @@ pub async fn node_settings_set(
 #[tauri::command]
 pub async fn enroll_apply(
     app: AppHandle,
-    state: State<'_, AppState>,
     secret: String,
     seed_url: Option<String>,
     realm: Option<String>,
     label: Option<String>,
 ) -> Result<EnrollResult, DesktopError> {
-    let link = EnrollLink::accept(secret, seed_url, realm)?;
+    arm(&app, EnrollLink::accept(secret, seed_url, realm)?, label).await
+}
+
+/// Stores a one-time secret and restarts the node, which consumes it while it
+/// boots. Shared with the `aruna://enroll` deep link, so a followed link and a
+/// pasted code arm the device the same way.
+pub async fn arm(
+    app: &AppHandle,
+    link: EnrollLink,
+    label: Option<String>,
+) -> Result<EnrollResult, DesktopError> {
+    let state = app.state::<AppState>();
     let label = label.map(|label| label.trim().to_string());
 
     let mut settings = state.settings();
@@ -175,12 +200,33 @@ pub async fn enroll_apply(
         tracker.cursor = 0;
     }
     state.supervisor.restart().await?;
-    shell::sync(&app);
+    shell::sync(app);
 
     Ok(EnrollResult {
         node_id: None,
         realm: link.realm.or_else(|| state.settings().realm.clone()),
     })
+}
+
+/// Checks a realm address the owner typed, remembers it as this device's realm
+/// and answers with the origin the portal will talk to. Remembering is the
+/// point: it is what the shell points the portal at until a node is enrolled.
+#[tauri::command]
+pub async fn validate_realm(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    input: String,
+) -> Result<RealmTarget, DesktopError> {
+    let origin = realm::normalize(&input)?;
+    let target = realm::check(&state.http, &origin)
+        .await
+        .map_err(|reach| DesktopError::Unreachable(reach.message(&origin)))?;
+
+    let mut settings = state.settings();
+    settings.remember_realm(&target.origin);
+    state.store(settings)?;
+    shell::sync(&app);
+    Ok(target)
 }
 
 /// Destroys this device: the node stops, everything the desktop provisioned for

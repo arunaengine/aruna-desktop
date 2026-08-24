@@ -16,8 +16,8 @@ use tokio::sync::oneshot;
 use crate::error::DesktopError;
 use crate::settings::NodeSettings;
 
-pub use health::{HealthReport, NodeInfo, info, probe, realm_id};
-pub use logs::{LogBuffer, LogPage, Stream};
+pub use health::{NodeInfo, info, probe, realm_id};
+pub use logs::{LogBuffer, Stream};
 
 /// Emitted to the frontend whenever the supervised node changes state.
 pub const STATUS_EVENT: &str = "node-status";
