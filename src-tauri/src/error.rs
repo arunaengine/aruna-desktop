@@ -18,6 +18,10 @@ pub enum DesktopError {
     Tauri(#[from] tauri::Error),
     #[error("invalid deep link: {0}")]
     DeepLink(String),
+    #[error("invalid realm address: {0}")]
+    Address(String),
+    #[error("{0}")]
+    Unreachable(String),
 }
 
 impl Serialize for DesktopError {

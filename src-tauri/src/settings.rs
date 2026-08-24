@@ -66,6 +66,9 @@ pub struct NodeSettings {
     pub seed_url: Option<String>,
     /// The realm the enrollment link named, for display and the realm poll.
     pub realm: Option<String>,
+    /// The remembered realm portal origin. Its presence is what makes the app
+    /// open on status instead of the welcome landing.
+    pub realm_url: Option<String>,
     /// Set once the realm has listed this node, so the app opens on status.
     pub enrolled: bool,
     pub auto_start: bool,
@@ -85,6 +88,7 @@ impl Default for NodeSettings {
             onboarding_secret: None,
             seed_url: None,
             realm: None,
+            realm_url: None,
             enrolled: false,
             auto_start: false,
             extra_env: BTreeMap::new(),
@@ -150,9 +154,15 @@ impl NodeSettings {
             onboarding_secret: self.onboarding_secret.clone(),
             seed_url: self.seed_url.clone(),
             realm: self.realm.clone(),
+            realm_url: self.realm_url.clone(),
             enrolled: self.enrolled,
             ..edited
         }
+    }
+
+    /// Remembers the realm the portal window opens.
+    pub fn remember_realm(&mut self, url: &str) {
+        self.realm_url = Some(url.to_string());
     }
 
     /// Arms the next start with an accepted invitation.
@@ -323,9 +333,11 @@ mod tests {
         // The settings view never sees the secret, so saving must not drop it.
         let mut stored = NodeSettings::default();
         stored.enroll("s1".into(), "https://seed.example".into(), Some("r".into()));
+        stored.remember_realm("https://aruna.example");
 
         let edited = NodeSettings {
             auto_start: true,
+            realm_url: None,
             ..stored.redacted()
         };
         let merged = stored.merge_edits(edited);
@@ -333,6 +345,7 @@ mod tests {
         assert_eq!(merged.onboarding_secret.as_deref(), Some("s1"));
         assert_eq!(merged.realm.as_deref(), Some("r"));
         assert_eq!(merged.seed_url.as_deref(), Some("https://seed.example"));
+        assert_eq!(merged.realm_url.as_deref(), Some("https://aruna.example"));
     }
 
     #[test]

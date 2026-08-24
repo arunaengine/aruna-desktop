@@ -3,6 +3,7 @@ mod deep_link;
 mod enroll;
 mod error;
 mod node;
+mod realm;
 mod settings;
 mod state;
 mod windows;
@@ -75,6 +76,7 @@ pub fn run() {
             commands::enroll_accept,
             commands::enroll_paste,
             commands::enroll_poll,
+            commands::realm_connect,
             commands::portal_open,
         ])
         .run(tauri::generate_context!())

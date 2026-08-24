@@ -7,6 +7,7 @@ import type {
   NodeSettings,
   NodeStatus,
   Paths,
+  RealmTarget,
 } from './types'
 
 export const nodeStatus = () => invoke<NodeStatus>('node_status')
@@ -27,4 +28,5 @@ export const enrollPaste = (text: string, seed: string, realm: string) =>
   invoke<EnrollProgress>('enroll_paste', { text, seed, realm })
 export const enrollPoll = () => invoke<EnrollProgress>('enroll_poll')
 
+export const realmConnect = (address: string) => invoke<RealmTarget>('realm_connect', { address })
 export const portalOpen = () => invoke<void>('portal_open')

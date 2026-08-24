@@ -4,6 +4,7 @@ use crate::deep_link::{self, EnrollInvite, EnrollLink};
 use crate::enroll::{self, EnrollPhase, EnrollProgress, Observed};
 use crate::error::DesktopError;
 use crate::node::{self, HealthReport, LogPage, NodeState, NodeStatus};
+use crate::realm::{self, RealmTarget};
 use crate::settings::NodeSettings;
 use crate::state::{AppState, Paths};
 use crate::windows;
@@ -182,6 +183,27 @@ pub async fn enroll_poll(state: State<'_, AppState>) -> Result<EnrollProgress, D
         tracker.progress.finish();
     }
     Ok(tracker.progress.clone())
+}
+
+/// Validates a realm address, remembers it and opens its portal window. The
+/// login itself happens in that window, like it would in any browser.
+#[tauri::command]
+pub async fn realm_connect(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    address: String,
+) -> Result<RealmTarget, DesktopError> {
+    let origin = realm::normalize(&address)?;
+    let target = realm::check(&state.http, &origin)
+        .await
+        .map_err(|reach| DesktopError::Unreachable(reach.message(&origin)))?;
+
+    let mut settings = state.settings();
+    settings.remember_realm(&target.url);
+    state.store(settings)?;
+
+    windows::open_portal(&app, &target.url, None)?;
+    Ok(target)
 }
 
 #[tauri::command]

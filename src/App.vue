@@ -4,6 +4,7 @@ import { getVersion } from '@tauri-apps/api/app'
 import EnrollView from './views/EnrollView.vue'
 import SettingsView from './views/SettingsView.vue'
 import StatusView from './views/StatusView.vue'
+import WelcomeView from './views/WelcomeView.vue'
 import { boot, notice, report, tab } from './lib/store'
 import type { Tab } from './lib/store'
 
@@ -46,7 +47,8 @@ onMounted(async () => {
   </p>
 
   <main class="page">
-    <StatusView v-if="tab === 'status'" />
+    <WelcomeView v-if="tab === 'welcome'" />
+    <StatusView v-else-if="tab === 'status'" />
     <EnrollView v-else-if="tab === 'enroll'" />
     <SettingsView v-else />
   </main>

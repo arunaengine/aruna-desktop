@@ -3,7 +3,7 @@ import { listen } from '@tauri-apps/api/event'
 import * as api from './api'
 import type { EnrollInvite, EnrollProgress, NodeStatus } from './types'
 
-export type Tab = 'status' | 'enroll' | 'settings'
+export type Tab = 'welcome' | 'status' | 'enroll' | 'settings'
 
 const idle: NodeStatus = {
   state: 'stopped',
@@ -25,6 +25,7 @@ export const status = ref<NodeStatus>(idle)
 export const notice = ref('')
 export const invite = ref<EnrollInvite | null>(null)
 export const progress = ref<EnrollProgress>(unenrolled)
+export const realm = ref<string | null>(null)
 export const tab = ref<Tab>('status')
 
 export function report(error: unknown) {
@@ -41,8 +42,8 @@ export async function advance() {
 }
 
 // Subscribes to the backend events and picks up a deep link that arrived
-// before this window was ready. An unenrolled device opens on the enroll view,
-// an enrolled one on status.
+// before this window was ready. Without a remembered realm the app lands on the
+// welcome view; an arriving invitation still wins.
 export async function boot() {
   await listen<NodeStatus>('node-status', (event) => {
     status.value = event.payload
@@ -53,8 +54,11 @@ export async function boot() {
   })
   await refresh()
   await advance()
+  realm.value = (await api.settingsGet()).realmUrl
   invite.value = await api.enrollPending()
-  if (invite.value || progress.value.phase !== 'done') {
+  if (invite.value) {
     tab.value = 'enroll'
+  } else if (!realm.value) {
+    tab.value = 'welcome'
   }
 }

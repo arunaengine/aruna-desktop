@@ -120,6 +120,13 @@ button:disabled {
   margin: 0 0 0.7rem;
 }
 
+.hero h2 {
+  font-size: 1.15rem;
+  text-transform: none;
+  letter-spacing: normal;
+  color: var(--fg);
+}
+
 .row {
   display: flex;
   align-items: center;

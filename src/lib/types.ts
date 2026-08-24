@@ -61,6 +61,7 @@ export interface NodeSettings {
   onboardingSecret: string | null
   seedUrl: string | null
   realm: string | null
+  realmUrl: string | null
   enrolled: boolean
   autoStart: boolean
   extraEnv: Record<string, string>
@@ -71,6 +72,13 @@ export interface Paths {
   dataDir: string
   storageDir: string
   envFile: string
+}
+
+export interface RealmTarget {
+  url: string
+  realm: string | null
+  apiVersion: string | null
+  portal: boolean
 }
 
 export interface EnrollInvite {
