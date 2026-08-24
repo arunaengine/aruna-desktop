@@ -7,11 +7,17 @@ use crate::error::DesktopError;
 use crate::windows;
 
 /// Emitted once an `aruna://enroll` link has been acted on, so the portal can
-/// show what happened without ever seeing the secret.
+/// show what happened without ever seeing the secret. It is a hint, not the
+/// source of truth: a cold start may deliver it before the portal listens, and
+/// `node_status` reports the same enrollment either way.
 pub const ENROLL_EVENT: &str = "enroll-invite";
 
 /// The scheme registered for this app, matching `tauri.conf.json`.
 pub const SCHEME: &str = "aruna";
+
+/// Where each deep link lands the portal's router.
+const DEVICE_ROUTE: &str = "/app/device";
+const CALLBACK_ROUTE: &str = "/auth/callback";
 
 /// A parsed enrollment invitation. The secret is one-time and never logged,
 /// never emitted to the webview, and never returned by a command; it leaves
@@ -111,7 +117,11 @@ fn apply_enroll(app: &AppHandle, url: &Url) {
     let seed = link.seed.clone();
     let realm = link.realm.clone();
     let app = app.clone();
-    windows::focus_main(&app);
+    // The device page shows the enrollment whether or not the event lands, so
+    // a link followed into a cold start still arrives somewhere useful.
+    if let Err(error) = windows::navigate_main(&app, DEVICE_ROUTE) {
+        tracing::warn!(%error, "Could not open the device page");
+    }
 
     tauri::async_runtime::spawn(async move {
         let joined = bridge::arm(&app, link, None).await;
@@ -188,7 +198,7 @@ fn forward_auth(app: &AppHandle, url: &Url) {
 /// The portal route an `aruna://auth/callback` link becomes. Both the query and
 /// the fragment are kept: a provider may answer in either.
 fn callback_route(url: &Url) -> String {
-    let mut route = String::from("/auth/callback");
+    let mut route = String::from(CALLBACK_ROUTE);
     if let Some(query) = url.query() {
         route.push('?');
         route.push_str(query);
@@ -248,6 +258,36 @@ mod tests {
         assert!(enroll("aruna://enroll?seed=https%3A%2F%2Fs.example").is_err());
         assert!(enroll("aruna://enroll?secret=s1").is_err());
         assert!(enroll("aruna://enroll?secret=%20&seed=https%3A%2F%2Fs.example").is_err());
+    }
+
+    #[test]
+    fn keeps_the_callback_answer() {
+        // A provider answers in the query or in the fragment; both have to
+        // reach the portal's router untouched.
+        let route = |raw: &str| callback_route(&Url::parse(raw).expect("valid url"));
+        assert_eq!(
+            route("aruna://auth/callback?code=abc&state=xyz"),
+            "/auth/callback?code=abc&state=xyz"
+        );
+        assert_eq!(
+            route("aruna://auth/callback#access_token=abc"),
+            "/auth/callback#access_token=abc"
+        );
+        assert_eq!(route("aruna://auth/callback"), "/auth/callback");
+    }
+
+    #[test]
+    fn hides_the_secret() {
+        // The invitation the portal is told about carries no secret at all.
+        let invite = EnrollInvite {
+            seed: Some("https://seed.example".into()),
+            realm: Some("r-1".into()),
+            applied: true,
+            error: None,
+        };
+        let json = serde_json::to_string(&invite).expect("a serializable invite");
+        assert!(!json.contains("secret"));
+        assert!(json.contains("\"applied\":true"));
     }
 
     #[test]
