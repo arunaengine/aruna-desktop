@@ -25,6 +25,7 @@ src/                                       its sources, fallback.html included
 capabilities/                              what the app window may call
 icons/                                     the bundle icon set, from the brand mark
 scripts/sync-frontend.sh                   installs the portal into ui/
+scripts/install-dev-desktop.sh             desktop entry + icons for a dev run
 ui/                                        the portal artifact (gitignored)
 ```
 
@@ -168,6 +169,31 @@ by itself.
 On Wayland the app sets `WEBKIT_DISABLE_DMABUF_RENDERER=1` before the webview
 starts, unless that variable or `ARUNA_DESKTOP_NO_WAYLAND_WORKAROUND` is already
 set.
+
+### The window icon on Linux
+
+A compositor does not read the icon out of the running app: it looks for an
+installed desktop entry whose name matches the window's app id. Packaged builds
+install one, so their windows carry the Aruna mark; a `cargo run` installs
+nothing, and the window shows a placeholder. Once per machine:
+
+```bash
+scripts/install-dev-desktop.sh            # --remove undoes it
+```
+
+It installs `icons/` into `~/.local/share/icons/hicolor/<size>/apps/` and writes
+`~/.local/share/applications/<app id>.desktop`, then refreshes the desktop and
+icon caches where those tools exist.
+
+The app id is **`aruna-desktop`**, the binary name, not the bundle identifier:
+GTK takes a window's Wayland `app_id` from the program name, which a window of
+this app confirms with `set_app_id("aruna-desktop")` under `WAYLAND_DEBUG=1`.
+The script derives it the same way rather than assuming, and honours
+`app.enableGtkAppId` if that is ever switched on.
+
+It does not claim the `aruna` scheme: the deep-link plugin writes its own
+`aruna-desktop-handler.desktop` for that at runtime, and the two entries would
+otherwise fight over it.
 
 Checks:
 
