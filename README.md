@@ -48,26 +48,28 @@ and a stale shell environment cannot leak in.
 | `PORTAL_MODE` | `artifact` with a portal directory set, otherwise `disabled` |
 | `PORTAL_DIR` | the portal artifact directory (portal mode only) |
 | `PORTAL_SOCKET_ADDRESS` | `127.0.0.1:34115` (portal mode only) |
-| `S3_ADDRESS`, `S3_HOST`, `S3_PUBLIC_URL` | only while the local S3 endpoint is enabled |
+| `S3_ADDRESS`, `S3_HOST` | the loopback endpoint while the local S3 listener is on, **empty** while it is off |
+| `S3_PUBLIC_URL` | only while the local S3 endpoint is enabled |
 | `ONBOARDING_SECRET` | the one-time enrollment secret, consumed on the next start |
 
 The ports are fixed on loopback so the portal origin and the OIDC redirect URI
 can be registered up front. They are editable in the settings view for the rare
 clash.
 
-### Waiting on aruna
+Two of those rows are the device profile itself:
 
-Stock aruna still expects a full server profile, so two things are known gaps
-rather than bugs here:
+* an **empty** `S3_HOST` and `S3_ADDRESS` is how the node is told to serve no S3
+  listener. They are written empty rather than omitted, because an omitted key
+  leaves an inherited or `.env`-provided one in place. Setting only one of the
+  pair aborts the node, so they always move together.
+* `PORTAL_MODE` is written as `disabled` when no portal directory is set. It is
+  never written empty: aruna accepts only `artifact` and `disabled`, and an
+  empty value is a configuration error rather than a default.
 
-* `S3_HOST` and `S3_ADDRESS` are mandatory in aruna's configuration, so a device
-  profile with the S3 listener switched off cannot start until the optional
-  listener work lands. Enable the local S3 endpoint in the settings meanwhile.
-* the node aborts when no `.env` file exists, which is why the file is always
-  written even though the environment already carries every value.
-
-Device enrollment status, the device list, and the portal's OIDC callback path
-are marked `TODO(aruna)` in the sources; they arrive with the user-node routes.
+The `.env` file is no longer mandatory for the node, which starts fine on the
+inherited environment alone. It is still written, because it is what an owner
+inspects when a start goes wrong, and `dotenvy` never overrides a value the
+desktop already set.
 
 ## Deep links
 
@@ -76,11 +78,68 @@ The `aruna` scheme is registered by the app (`tauri-plugin-deep-link`), and
 
 | Link | Behaviour |
 | --- | --- |
-| `aruna://enroll?secret=…&realm=…&name=…&endpoint=…` | the payload is stashed, the enroll view opens with the secret prefilled |
+| `aruna://enroll?secret=…&seed=…&realm=…` | the invitation is stashed in the backend and the enroll view opens |
 | `aruna://auth/callback?…` | the query is forwarded to the portal window, which owns the OIDC exchange |
 
 Both accept the authority-less form (`aruna:enroll?…`) as well. Unknown routes
 are dropped with a warning that names the route only, never the query.
+
+`secret` and `seed` are required and `seed` must be an `http`/`https` origin;
+a link missing either is dropped. `realm` is a label, and the seed can be asked
+for it when a paste carries none.
+
+The portal's OIDC callback path is still marked `TODO(aruna)`: it mirrors the
+loopback redirect URI until the website auth seam names it.
+
+## Enrollment
+
+The seed mints the secret and the deep link; `aruna/api/src/routes/onboarding.rs`
+builds exactly the three query keys above.
+
+The node needs **only `ONBOARDING_SECRET`**. The seed URL, the realm id, the
+enrollment id and the onboarding mode all travel inside the secret itself
+(`core/src/onboarding.rs`, postcard plus URL-safe base64), which the joiner
+decodes to reach `{seed}/api/v1/onboarding/bootstrap`. There is no seed, realm
+or node-kind environment key to set, and none exists.
+
+The desktop keeps the seed URL and the realm id anyway, because it polls them.
+The secret is stored once, is never sent to the webview, never logged, and is
+cleared from the settings the moment the node serves the realm. It must not be
+cleared earlier: a node whose join is half finished needs it again to resume.
+
+### The two signals
+
+The device cannot poll `GET {seed}/api/v1/onboarding/secrets/{id}/status`: the
+deep link carries no enrollment id, and the route needs a realm bearer token.
+Enrollment progress is therefore observed, never queried:
+
+1. `GET http://127.0.0.1:34117/readyz` turning `200`. The node binds its
+   listeners only after the join has succeeded, and nothing is logged when it
+   does, so readiness is the authoritative "the seed accepted this device".
+2. `GET http://127.0.0.1:34116/api/v1/info/realm` reporting the `realm_id` from
+   the invitation. `GET {seed}/api/v1/info/realm` answers anonymously too, but
+   it only fills its `nodes` list for a caller holding a realm token, so the
+   realm id is the field a token-less desktop can use. The seed is asked for it
+   when a pasted secret named no realm.
+
+The view walks `received -> starting -> waiting -> visible -> done`, and the
+progress only ever moves forward, so a blipping probe cannot rewind it.
+
+### Failures
+
+The joiner logs nothing about the join through `tracing`. On a refused secret it
+prints one line to stderr and exits with code 1, so the supervisor's stderr tail
+is scanned for it and turned into a targeted message:
+
+| Node output | Shown as |
+| --- | --- |
+| `onboarding bootstrap failed: bootstrap endpoint returned 401 Unauthorized` | the secret is expired, already used, or invalid |
+| `onboarding bootstrap failed: bootstrap endpoint returned 409 Conflict` | the realm will take no further device for this owner |
+| `onboarding mode mismatch between secret and bootstrap response` | the secret was minted for another kind of node |
+| `… requires ONBOARDING_SECRET to refresh bootstrap material` | an interrupted join; a fresh secret is needed |
+| `… waiting for onboarding placement for node …` | accepted but never placed |
+
+A node that cannot stay up fails the enrollment once the supervisor gives up.
 
 ## Development
 
