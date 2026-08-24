@@ -54,8 +54,8 @@ pub struct NodeSettings {
     /// Portal artifact directory; the portal listener stays off while unset.
     pub portal_dir: Option<PathBuf>,
     pub ports: NodePorts,
-    /// Stock aruna still requires `S3_HOST`/`S3_ADDRESS`, so a device profile
-    /// without the S3 listener needs the optional-listener work in aruna.
+    /// Off by default: a device profile serves no S3 listener, which the node
+    /// is told through an empty `S3_HOST` and `S3_ADDRESS` pair.
     pub s3_enabled: bool,
     pub shutdown_grace_secs: u64,
     /// One-time enrollment secret; consumed by the node on its next start and
