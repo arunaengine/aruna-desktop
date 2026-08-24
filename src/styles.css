@@ -245,3 +245,55 @@ code {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.85em;
 }
+
+.steps {
+  list-style: none;
+  margin: 0 0 0.9rem;
+  padding: 0;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.steps li {
+  display: grid;
+  grid-template-columns: 1.3rem 1fr;
+  gap: 0.1rem 0.5rem;
+  color: var(--muted);
+}
+
+.steps li::before {
+  content: '○';
+  grid-row: span 2;
+}
+
+.steps li[data-mark='done'],
+.steps li[data-mark='current'] {
+  color: var(--fg);
+}
+
+.steps li[data-mark='done']::before {
+  content: '✓';
+  color: var(--ok);
+}
+
+.steps li[data-mark='current']::before {
+  content: '●';
+  color: var(--accent);
+}
+
+.steps .label {
+  font-weight: 600;
+}
+
+.steps .muted {
+  font-size: 0.85em;
+}
+
+.failure {
+  margin: 0 0 0.8rem;
+  padding: 0.5rem 0.7rem;
+  border: 1px solid var(--bad);
+  border-radius: 6px;
+  color: var(--bad);
+  background: color-mix(in srgb, var(--bad) 10%, transparent);
+}
