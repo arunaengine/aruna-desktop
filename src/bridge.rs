@@ -299,10 +299,10 @@ pub fn open_external(app: AppHandle, url: String) -> Result<(), DesktopError> {
 
 fn web_url(raw: &str) -> Result<String, DesktopError> {
     let url = url::Url::parse(raw.trim())
-        .map_err(|error| DesktopError::Address(format!("unreadable URL: {error}")))?;
+        .map_err(|error| DesktopError::Link(format!("unreadable URL: {error}")))?;
     match url.scheme() {
         "http" | "https" => Ok(url.to_string()),
-        scheme => Err(DesktopError::Address(format!(
+        scheme => Err(DesktopError::Link(format!(
             "{scheme} links are not opened outside the app"
         ))),
     }

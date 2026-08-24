@@ -20,6 +20,9 @@ pub enum DesktopError {
     DeepLink(String),
     #[error("invalid realm address: {0}")]
     Address(String),
+    /// A URL the app will not act on. The message is shown as written.
+    #[error("{0}")]
+    Link(String),
     #[error("{0}")]
     Unreachable(String),
 }
