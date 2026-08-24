@@ -1,8 +1,9 @@
 use tauri::{AppHandle, State};
 
-use crate::deep_link::EnrollPayload;
+use crate::deep_link::{self, EnrollInvite, EnrollLink};
+use crate::enroll::{self, EnrollPhase, EnrollProgress, Observed};
 use crate::error::DesktopError;
-use crate::node::{self, HealthReport, LogPage, NodeStatus};
+use crate::node::{self, HealthReport, LogPage, NodeState, NodeStatus};
 use crate::settings::NodeSettings;
 use crate::state::{AppState, Paths};
 use crate::windows;
@@ -40,20 +41,22 @@ pub async fn node_health(state: State<'_, AppState>) -> Result<HealthReport, Des
 
 #[tauri::command]
 pub fn settings_get(state: State<'_, AppState>) -> NodeSettings {
-    state.settings()
+    state.settings().redacted()
 }
 
 /// Persists the settings. They reach the node on its next start, which the
 /// settings view makes explicit rather than restarting behind the owner's back.
+/// The enrollment fields are kept from the stored copy, because the view never
+/// receives the one-time secret and so cannot send it back.
 #[tauri::command]
 pub fn settings_save(
     state: State<'_, AppState>,
     settings: NodeSettings,
 ) -> Result<NodeSettings, DesktopError> {
-    settings.validate()?;
-    settings.save(&state.settings_path)?;
-    *state.settings.lock().expect("settings poisoned") = settings.clone();
-    Ok(settings)
+    let merged = state.settings().merge_edits(settings);
+    merged.validate()?;
+    state.store(merged.clone())?;
+    Ok(merged.redacted())
 }
 
 #[tauri::command]
@@ -61,36 +64,121 @@ pub fn paths_get(state: State<'_, AppState>) -> Paths {
     state.paths()
 }
 
-/// Hands the stashed deep-link payload to the enroll view exactly once.
+/// Shows the enroll view what a stashed deep link offers, without its secret.
 #[tauri::command]
-pub fn enroll_take(state: State<'_, AppState>) -> Option<EnrollPayload> {
+pub fn enroll_pending(state: State<'_, AppState>) -> Option<EnrollInvite> {
     state
         .pending
         .lock()
         .expect("pending enrollment poisoned")
-        .take()
+        .as_ref()
+        .map(EnrollLink::invite)
 }
 
-/// Stores the one-time secret and restarts the node so it enrolls on boot.
-/// TODO(aruna): the enrollment status poll and the device list land with the
-/// user-node routes; until then the node's own logs report the outcome.
+/// Enrolls with the stashed deep link.
 #[tauri::command]
-pub async fn enroll_apply(
+pub async fn enroll_accept(state: State<'_, AppState>) -> Result<EnrollProgress, DesktopError> {
+    let link = state
+        .pending
+        .lock()
+        .expect("pending enrollment poisoned")
+        .take()
+        .ok_or_else(|| DesktopError::DeepLink("no invitation is waiting".into()))?;
+    arm(&state, link).await
+}
+
+/// The paste fallback: a whole `aruna://enroll` link, or a bare secret with the
+/// seed URL typed beside it.
+#[tauri::command]
+pub async fn enroll_paste(
     state: State<'_, AppState>,
-    secret: String,
-) -> Result<NodeStatus, DesktopError> {
-    let secret = secret.trim().to_string();
-    if secret.is_empty() {
-        return Err(DesktopError::Settings(
-            "the enrollment secret is empty".into(),
-        ));
-    }
+    text: String,
+    seed: String,
+    realm: String,
+) -> Result<EnrollProgress, DesktopError> {
+    arm(&state, deep_link::parse_paste(&text, &seed, &realm)?).await
+}
+
+/// Stores the one-time secret and restarts the node, which consumes it while
+/// it boots. Everything after this is observed, never commanded.
+async fn arm(state: &AppState, link: EnrollLink) -> Result<EnrollProgress, DesktopError> {
+    let seed = link.seed.clone();
+    let realm = link.realm.clone();
+
     let mut settings = state.settings();
-    settings.onboarding_secret = Some(secret);
+    settings.enroll(link.secret, seed.clone(), realm.clone());
     settings.validate()?;
-    settings.save(&state.settings_path)?;
-    *state.settings.lock().expect("settings poisoned") = settings;
-    state.supervisor.restart().await
+    state.store(settings)?;
+
+    {
+        let mut tracker = state.enroll.lock().expect("enrollment poisoned");
+        tracker.progress.accept(&seed, realm.as_deref());
+        tracker.cursor = 0;
+    }
+
+    state.supervisor.restart().await?;
+    Ok(state.progress())
+}
+
+/// Advances the enrollment from what can be observed: the supervisor's state,
+/// the node's output, the ops readiness probe, and the realm the node serves.
+#[tauri::command]
+pub async fn enroll_poll(state: State<'_, AppState>) -> Result<EnrollProgress, DesktopError> {
+    let (active, mut realm, seed, cursor) = {
+        let tracker = state.enroll.lock().expect("enrollment poisoned");
+        (
+            tracker.progress.active(),
+            tracker.progress.realm.clone(),
+            tracker.progress.seed.clone(),
+            tracker.cursor,
+        )
+    };
+    if !active {
+        return Ok(state.progress());
+    }
+
+    let status = state.supervisor.status();
+    let page = state.supervisor.logs().page(cursor);
+    let refusal = page
+        .lines
+        .iter()
+        .find_map(|line| enroll::refusal(&line.text));
+
+    let settings = state.settings();
+    let ready = status.state == NodeState::Running
+        && node::probe(&state.http, settings.ports.ops).await.ready.ok;
+
+    // A pasted bare secret names no realm, so the seed is asked which one it
+    // serves; the seed cannot list its nodes to an anonymous caller.
+    if ready && realm.is_none() && let Some(seed) = seed.as_deref() {
+        realm = node::realm_id(&state.http, seed).await;
+    }
+    let served = match ready {
+        true => node::realm_id(&state.http, &settings.api_url()).await,
+        false => None,
+    };
+    let in_realm = served.is_some() && served == realm;
+
+    let mut tracker = state.enroll.lock().expect("enrollment poisoned");
+    tracker.cursor = page.cursor;
+    if tracker.progress.realm.is_none() {
+        tracker.progress.realm = realm;
+    }
+    tracker.progress.observe(Observed {
+        state: status.state,
+        ready,
+        in_realm,
+        refusal,
+    });
+    if tracker.progress.phase == EnrollPhase::Visible {
+        // The secret is spent only once the node serves the realm: dropping it
+        // while the join is half done leaves the node unable to finish.
+        let mut settings = state.settings();
+        settings.joined(tracker.progress.realm.clone());
+        state.store(settings)?;
+        tracker.progress.finish();
+    }
+    Ok(tracker.progress.clone())
 }
 
 #[tauri::command]

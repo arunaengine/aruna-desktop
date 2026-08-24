@@ -1,6 +1,7 @@
 import { invoke } from '@tauri-apps/api/core'
 import type {
-  EnrollPayload,
+  EnrollInvite,
+  EnrollProgress,
   HealthReport,
   LogPage,
   NodeSettings,
@@ -20,7 +21,10 @@ export const settingsSave = (settings: NodeSettings) =>
   invoke<NodeSettings>('settings_save', { settings })
 export const pathsGet = () => invoke<Paths>('paths_get')
 
-export const enrollTake = () => invoke<EnrollPayload | null>('enroll_take')
-export const enrollApply = (secret: string) => invoke<NodeStatus>('enroll_apply', { secret })
+export const enrollPending = () => invoke<EnrollInvite | null>('enroll_pending')
+export const enrollAccept = () => invoke<EnrollProgress>('enroll_accept')
+export const enrollPaste = (text: string, seed: string, realm: string) =>
+  invoke<EnrollProgress>('enroll_paste', { text, seed, realm })
+export const enrollPoll = () => invoke<EnrollProgress>('enroll_poll')
 
 export const portalOpen = () => invoke<void>('portal_open')

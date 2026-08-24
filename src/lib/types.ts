@@ -57,7 +57,11 @@ export interface NodeSettings {
   ports: NodePorts
   s3Enabled: boolean
   shutdownGraceSecs: number
+  // Always null over the bridge: the backend redacts the one-time secret.
   onboardingSecret: string | null
+  seedUrl: string | null
+  realm: string | null
+  enrolled: boolean
   autoStart: boolean
   extraEnv: Record<string, string>
 }
@@ -69,9 +73,23 @@ export interface Paths {
   envFile: string
 }
 
-export interface EnrollPayload {
-  secret: string | null
+export interface EnrollInvite {
+  seed: string
   realm: string | null
-  name: string | null
-  endpoints: string[]
+}
+
+export type EnrollPhase =
+  | 'idle'
+  | 'received'
+  | 'starting'
+  | 'waiting'
+  | 'visible'
+  | 'done'
+  | 'failed'
+
+export interface EnrollProgress {
+  phase: EnrollPhase
+  realm: string | null
+  seed: string | null
+  detail: string | null
 }

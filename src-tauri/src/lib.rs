@@ -1,5 +1,6 @@
 mod commands;
 mod deep_link;
+mod enroll;
 mod error;
 mod node;
 mod settings;
@@ -70,8 +71,10 @@ pub fn run() {
             commands::settings_get,
             commands::settings_save,
             commands::paths_get,
-            commands::enroll_take,
-            commands::enroll_apply,
+            commands::enroll_pending,
+            commands::enroll_accept,
+            commands::enroll_paste,
+            commands::enroll_poll,
             commands::portal_open,
         ])
         .run(tauri::generate_context!())

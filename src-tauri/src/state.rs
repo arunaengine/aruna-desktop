@@ -4,7 +4,8 @@ use std::sync::{Arc, Mutex};
 use serde::Serialize;
 use tauri::{AppHandle, Manager};
 
-use crate::deep_link::EnrollPayload;
+use crate::deep_link::EnrollLink;
+use crate::enroll::{EnrollProgress, Tracker};
 use crate::error::DesktopError;
 use crate::node::Supervisor;
 use crate::settings::NodeSettings;
@@ -25,8 +26,10 @@ pub struct AppState {
     pub data_dir: PathBuf,
     pub supervisor: Supervisor,
     pub http: reqwest::Client,
-    /// Payload of the last consumed `aruna://enroll` link, awaiting the view.
-    pub pending: Mutex<Option<EnrollPayload>>,
+    /// The last `aruna://enroll` link, waiting for the owner to accept it. It
+    /// carries the one-time secret, so it never leaves the backend.
+    pub pending: Mutex<Option<EnrollLink>>,
+    pub enroll: Mutex<Tracker>,
 }
 
 impl AppState {
@@ -36,7 +39,15 @@ impl AppState {
         let data_dir = paths.app_data_dir()?.join("node");
         let resources = paths.resource_dir().ok();
 
-        let settings = Arc::new(Mutex::new(NodeSettings::load(&settings_path)));
+        let stored = NodeSettings::load(&settings_path);
+        let mut tracker = Tracker::default();
+        if stored.enrolled {
+            tracker
+                .progress
+                .settle(stored.seed_url.clone(), stored.realm.clone());
+        }
+
+        let settings = Arc::new(Mutex::new(stored));
         let supervisor = Supervisor::new(
             app.clone(),
             data_dir.clone(),
@@ -51,11 +62,28 @@ impl AppState {
             supervisor,
             http: reqwest::Client::new(),
             pending: Mutex::new(None),
+            enroll: Mutex::new(tracker),
         })
     }
 
     pub fn settings(&self) -> NodeSettings {
         self.settings.lock().expect("settings poisoned").clone()
+    }
+
+    /// Replaces the stored settings and the file behind them together, so the
+    /// next node start and the next launch agree.
+    pub fn store(&self, settings: NodeSettings) -> Result<(), DesktopError> {
+        settings.save(&self.settings_path)?;
+        *self.settings.lock().expect("settings poisoned") = settings;
+        Ok(())
+    }
+
+    pub fn progress(&self) -> EnrollProgress {
+        self.enroll
+            .lock()
+            .expect("enrollment poisoned")
+            .progress
+            .clone()
     }
 
     pub fn paths(&self) -> Paths {

@@ -58,8 +58,16 @@ pub struct NodeSettings {
     /// without the S3 listener needs the optional-listener work in aruna.
     pub s3_enabled: bool,
     pub shutdown_grace_secs: u64,
-    /// One-time enrollment secret; consumed by the node on its next start.
+    /// One-time enrollment secret; consumed by the node on its next start and
+    /// cleared once the realm lists this node. Never leaves the backend.
     pub onboarding_secret: Option<String>,
+    /// The seed's base URL, taken from the enrollment link. The node reads its
+    /// own copy out of the secret; the desktop keeps it to poll the realm.
+    pub seed_url: Option<String>,
+    /// The realm the enrollment link named, for display and the realm poll.
+    pub realm: Option<String>,
+    /// Set once the realm has listed this node, so the app opens on status.
+    pub enrolled: bool,
     pub auto_start: bool,
     /// Escape hatch for node keys the desktop does not model yet.
     pub extra_env: BTreeMap<String, String>,
@@ -75,6 +83,9 @@ impl Default for NodeSettings {
             s3_enabled: false,
             shutdown_grace_secs: 20,
             onboarding_secret: None,
+            seed_url: None,
+            realm: None,
+            enrolled: false,
             auto_start: false,
             extra_env: BTreeMap::new(),
         }
@@ -121,6 +132,45 @@ impl NodeSettings {
             )));
         }
         Ok(())
+    }
+
+    /// What the control window is allowed to see. The one-time secret never
+    /// crosses into the webview, so the enroll view cannot echo or leak it.
+    pub fn redacted(&self) -> Self {
+        Self {
+            onboarding_secret: None,
+            ..self.clone()
+        }
+    }
+
+    /// Takes an edit from the settings view. The view never carries the fields
+    /// the enrollment owns, so they are kept from the stored copy.
+    pub fn merge_edits(&self, edited: Self) -> Self {
+        Self {
+            onboarding_secret: self.onboarding_secret.clone(),
+            seed_url: self.seed_url.clone(),
+            realm: self.realm.clone(),
+            enrolled: self.enrolled,
+            ..edited
+        }
+    }
+
+    /// Arms the next start with an accepted invitation.
+    pub fn enroll(&mut self, secret: String, seed: String, realm: Option<String>) {
+        self.onboarding_secret = Some(secret);
+        self.seed_url = Some(seed);
+        self.realm = realm;
+        self.enrolled = false;
+    }
+
+    /// Spends the secret once the realm lists this node, so no later start can
+    /// replay it.
+    pub fn joined(&mut self, realm: Option<String>) {
+        self.onboarding_secret = None;
+        self.enrolled = true;
+        if realm.is_some() {
+            self.realm = realm;
+        }
     }
 
     pub fn storage_dir(&self, data_dir: &Path) -> PathBuf {
@@ -178,6 +228,11 @@ impl NodeSettings {
                 "S3_PUBLIC_URL".to_string(),
                 format!("http://127.0.0.1:{}", self.ports.s3),
             ));
+        } else {
+            // An empty value is how the node is told to serve no S3 listener,
+            // and it has to be written to override an inherited one.
+            pairs.push(("S3_ADDRESS".to_string(), String::new()));
+            pairs.push(("S3_HOST".to_string(), String::new()));
         }
 
         if let Some(secret) = self.onboarding_secret.as_ref().filter(|s| !s.is_empty()) {
@@ -234,8 +289,62 @@ mod tests {
         assert_eq!(map["CORS_ALLOWED_ORIGINS"], "http://127.0.0.1:34115");
         assert_eq!(map["STORAGE_PATH"], "/data/storage");
         assert_eq!(map["PORTAL_MODE"], "disabled");
-        assert!(!map.contains_key("S3_ADDRESS"));
         assert!(!map.contains_key("ONBOARDING_SECRET"));
+    }
+
+    #[test]
+    fn disables_s3_explicitly() {
+        // Both keys must be written empty: half a pair aborts the node, and an
+        // omitted key would leave an inherited one in place.
+        let map = pairs(&NodeSettings::default());
+        assert_eq!(map["S3_ADDRESS"], "");
+        assert_eq!(map["S3_HOST"], "");
+        assert!(!map.contains_key("S3_PUBLIC_URL"));
+
+        let enabled = NodeSettings {
+            s3_enabled: true,
+            ..NodeSettings::default()
+        };
+        assert_eq!(pairs(&enabled)["S3_HOST"], "127.0.0.1:34118");
+    }
+
+    #[test]
+    fn hides_the_secret() {
+        let mut settings = NodeSettings::default();
+        settings.enroll("s1".into(), "https://seed.example".into(), Some("r".into()));
+        let shown = settings.redacted();
+        assert!(shown.onboarding_secret.is_none());
+        assert_eq!(shown.seed_url.as_deref(), Some("https://seed.example"));
+        assert_eq!(settings.onboarding_secret.as_deref(), Some("s1"));
+    }
+
+    #[test]
+    fn keeps_enrollment_on_edit() {
+        // The settings view never sees the secret, so saving must not drop it.
+        let mut stored = NodeSettings::default();
+        stored.enroll("s1".into(), "https://seed.example".into(), Some("r".into()));
+
+        let edited = NodeSettings {
+            auto_start: true,
+            ..stored.redacted()
+        };
+        let merged = stored.merge_edits(edited);
+        assert!(merged.auto_start);
+        assert_eq!(merged.onboarding_secret.as_deref(), Some("s1"));
+        assert_eq!(merged.realm.as_deref(), Some("r"));
+        assert_eq!(merged.seed_url.as_deref(), Some("https://seed.example"));
+    }
+
+    #[test]
+    fn spends_the_secret_once() {
+        let mut settings = NodeSettings::default();
+        settings.enroll("s1".into(), "https://seed.example".into(), None);
+        assert!(!settings.enrolled);
+        settings.joined(Some("r-1".into()));
+        assert!(settings.onboarding_secret.is_none());
+        assert!(settings.enrolled);
+        assert_eq!(settings.realm.as_deref(), Some("r-1"));
+        assert!(!pairs(&settings).contains_key("ONBOARDING_SECRET"));
     }
 
     #[test]

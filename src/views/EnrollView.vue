@@ -1,71 +1,78 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { computed, ref } from 'vue'
 import * as api from '../lib/api'
-import { pending, refresh, report } from '../lib/store'
+import { advance, invite, progress, report } from '../lib/store'
 
-const secret = ref('')
-const reveal = ref(false)
+const text = ref('')
+const seed = ref('')
+const realm = ref('')
 const busy = ref(false)
-const done = ref(false)
 
-// A deep link arrives at any time, so its secret fills the form when it lands.
-watch(
-  pending,
-  (payload) => {
-    if (payload?.secret) {
-      secret.value = payload.secret
-    }
-  },
-  { immediate: true },
-)
+// A pasted deep link carries its own seed, so the field is only needed beside
+// a bare secret.
+const pastedLink = computed(() => text.value.trim().toLowerCase().startsWith('aruna:'))
 
-async function apply() {
+async function run(action: () => Promise<unknown>) {
   busy.value = true
-  done.value = false
   try {
-    await api.enrollApply(secret.value)
-    await refresh()
-    done.value = true
+    await action()
+    await advance()
   } catch (error) {
     report(error)
   } finally {
     busy.value = false
   }
 }
+
+const accept = () => run(api.enrollAccept)
+const paste = () => run(() => api.enrollPaste(text.value, seed.value, realm.value))
 </script>
 
 <template>
-  <section v-if="pending" class="panel">
+  <section v-if="invite" class="panel">
     <h2>Invitation received</h2>
     <dl class="grid">
       <dt>Realm</dt>
-      <dd>{{ pending.realm ?? 'unnamed' }}</dd>
-      <dt>Device</dt>
-      <dd>{{ pending.name ?? 'this device' }}</dd>
-      <dt>Endpoints</dt>
-      <dd>{{ pending.endpoints.length > 0 ? pending.endpoints.join(', ') : 'from the realm document' }}</dd>
-      <dt>Secret</dt>
-      <dd class="mono">{{ reveal ? pending.secret : '••••••••••••' }}</dd>
+      <dd>{{ invite.realm ?? 'named by the seed' }}</dd>
+      <dt>Seed</dt>
+      <dd class="mono">{{ invite.seed }}</dd>
     </dl>
-    <label class="check">
-      <input v-model="reveal" type="checkbox" />
-      Show the secret
-    </label>
+    <p class="muted">
+      The one-time secret stays in the app. Enrolling restarts the node, which
+      redeems the secret against the seed while it boots.
+    </p>
+    <div class="row">
+      <button :disabled="busy" @click="accept">Enroll this device</button>
+    </div>
   </section>
 
   <section class="panel">
-    <h2>Enroll this device</h2>
+    <h2>Paste an invitation</h2>
     <p class="muted">
-      Paste the one-time secret from the portal wizard, or open its
-      <code>aruna://enroll</code> link. The node consumes the secret on its next
-      start, so applying it restarts the node.
+      Paste the whole <code>aruna://enroll</code> link from the portal wizard, or
+      the bare secret together with the seed's base URL.
     </p>
-    <textarea v-model="secret" rows="3" spellcheck="false" placeholder="one-time secret"></textarea>
+    <textarea
+      v-model="text"
+      rows="3"
+      spellcheck="false"
+      placeholder="aruna://enroll?secret=… or the bare secret"
+    ></textarea>
+    <template v-if="!pastedLink">
+      <label>
+        Seed URL
+        <input v-model="seed" spellcheck="false" placeholder="https://seed.example" />
+      </label>
+      <label>
+        Realm (optional)
+        <input v-model="realm" spellcheck="false" placeholder="asked of the seed" />
+      </label>
+    </template>
     <div class="row">
-      <button :disabled="busy || secret.trim().length === 0" @click="apply">
-        Apply and restart
+      <button :disabled="busy || text.trim().length === 0" @click="paste">
+        Enroll this device
       </button>
-      <span v-if="done" class="muted">Stored. Watch the status view for the outcome.</span>
+      <span v-if="progress.phase === 'failed'" class="muted">{{ progress.detail }}</span>
     </div>
   </section>
 </template>

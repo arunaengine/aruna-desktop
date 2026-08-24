@@ -1,7 +1,7 @@
 import { ref } from 'vue'
 import { listen } from '@tauri-apps/api/event'
 import * as api from './api'
-import type { EnrollPayload, NodeStatus } from './types'
+import type { EnrollInvite, EnrollProgress, NodeStatus } from './types'
 
 export type Tab = 'status' | 'enroll' | 'settings'
 
@@ -14,9 +14,17 @@ const idle: NodeStatus = {
   lastExit: null,
 }
 
+const unenrolled: EnrollProgress = {
+  phase: 'idle',
+  realm: null,
+  seed: null,
+  detail: null,
+}
+
 export const status = ref<NodeStatus>(idle)
 export const notice = ref('')
-export const pending = ref<EnrollPayload | null>(null)
+export const invite = ref<EnrollInvite | null>(null)
+export const progress = ref<EnrollProgress>(unenrolled)
 export const tab = ref<Tab>('status')
 
 export function report(error: unknown) {
@@ -27,20 +35,26 @@ export async function refresh() {
   status.value = await api.nodeStatus()
 }
 
+// Folds one observation round into the view; the backend owns the transitions.
+export async function advance() {
+  progress.value = await api.enrollPoll()
+}
+
 // Subscribes to the backend events and picks up a deep link that arrived
-// before this window was ready.
+// before this window was ready. An unenrolled device opens on the enroll view,
+// an enrolled one on status.
 export async function boot() {
   await listen<NodeStatus>('node-status', (event) => {
     status.value = event.payload
   })
-  await listen<EnrollPayload>('enroll-payload', (event) => {
-    pending.value = event.payload
+  await listen<EnrollInvite>('enroll-invite', (event) => {
+    invite.value = event.payload
     tab.value = 'enroll'
   })
   await refresh()
-  const stashed = await api.enrollTake()
-  if (stashed) {
-    pending.value = stashed
+  await advance()
+  invite.value = await api.enrollPending()
+  if (invite.value || progress.value.phase !== 'done') {
     tab.value = 'enroll'
   }
 }
