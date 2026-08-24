@@ -103,20 +103,36 @@ pub fn init_script(context: &ShellContext) -> String {
 /// that changed it still answers first.
 pub fn sync(app: &AppHandle) {
     let app = app.clone();
-    tauri::async_runtime::spawn(async move { apply(&app) });
+    tauri::async_runtime::spawn(async move {
+        apply(&app);
+    });
+}
+
+/// A connect must always land in the portal: when the context is already the
+/// wanted one no replacement happens, so the page waiting for one is sent to
+/// the portal root instead.
+pub fn reconnect(app: &AppHandle) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        if !apply(&app)
+            && let Err(error) = windows::navigate_main(&app, "/")
+        {
+            tracing::warn!(%error, "Could not reopen the portal");
+        }
+    });
 }
 
 /// Replaces the app window when what the portal must talk to has moved. The
 /// injected context cannot be changed after a webview is created, so a reload
-/// would only run the old script again.
-fn apply(app: &AppHandle) {
+/// would only run the old script again. Answers whether a replacement was due.
+fn apply(app: &AppHandle) -> bool {
     let state = app.state::<AppState>();
     let running = state.supervisor.status().state == NodeState::Running;
     let wanted = context(&state.settings(), running);
 
     let mut shell = state.shell.lock().expect("shell poisoned");
     if shell.context == wanted {
-        return;
+        return false;
     }
     let label = next_label(&shell.label);
     match windows::replace_main(app, &label, &wanted) {
@@ -126,6 +142,7 @@ fn apply(app: &AppHandle) {
         }
         Err(error) => tracing::warn!(%error, "Could not apply the shell context"),
     }
+    true
 }
 
 /// A label the old window no longer holds: closing one and opening another with

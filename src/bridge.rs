@@ -235,7 +235,7 @@ pub async fn validate_realm(
     let mut settings = state.settings();
     settings.remember_realm(&target.origin);
     state.store(settings)?;
-    shell::sync(&app);
+    shell::reconnect(&app);
     Ok(target)
 }
 
