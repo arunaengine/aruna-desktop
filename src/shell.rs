@@ -76,8 +76,8 @@ pub fn context(settings: &NodeSettings, running: bool) -> ShellContext {
     }
 }
 
-/// Renders the initialization script. It defines the context once and makes it
-/// non-writable, so nothing the page loads can repoint the portal afterwards.
+/// Renders the initialization script. The context is frozen and its binding is
+/// not writable, so nothing the page loads can repoint the portal afterwards.
 pub fn init_script(context: &ShellContext) -> String {
     let json = serde_json::to_string(context).expect("the shell context is serializable");
     format!(
@@ -93,7 +93,8 @@ pub fn init_script(context: &ShellContext) -> String {
       return internals.invoke(command, args || {{}});
     }},
   }};
-  Object.defineProperty(window, '__ARUNA_DESKTOP__', {{ value: context }});
+  Object.freeze(context.bridge);
+  Object.defineProperty(window, '__ARUNA_DESKTOP__', {{ value: Object.freeze(context) }});
 }})();"#
     )
 }
@@ -200,6 +201,7 @@ mod tests {
         assert!(script.contains("\"systemBrowserAuth\":true"));
         assert!(script.contains("version: 1"));
         assert!(script.contains("Object.defineProperty(window, '__ARUNA_DESKTOP__'"));
+        assert!(script.contains("Object.freeze(context)"));
     }
 
     #[test]
