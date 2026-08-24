@@ -37,6 +37,7 @@ pub fn open_main(
     Ok(
         WebviewWindowBuilder::new(app, label, WebviewUrl::App(PathBuf::from(path)))
             .title("Aruna")
+            .icon(tauri::include_image!("icons/128x128.png"))?
             .inner_size(1180.0, 820.0)
             .min_inner_size(820.0, 560.0)
             .initialization_script(shell::init_script(context))

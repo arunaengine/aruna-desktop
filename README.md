@@ -23,9 +23,16 @@ A plain Rust application: the crate is the repository.
 Cargo.toml  tauri.conf.json  build.rs      the app
 src/                                       its sources, fallback.html included
 capabilities/                              what the app window may call
-icons/                                     the bundle icon set
+icons/                                     the bundle icon set, from the brand mark
 scripts/sync-frontend.sh                   installs the portal into ui/
 ui/                                        the portal artifact (gitignored)
+```
+
+The icon set is generated from the portal's own brand mark, padded to a tenth
+of the square so it does not sit cramped in a dock:
+
+```bash
+npx --yes @tauri-apps/cli@2 icon <padded-mark>.png -o icons
 ```
 
 ## The shell context
