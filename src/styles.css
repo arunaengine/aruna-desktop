@@ -58,3 +58,190 @@ body {
 .page {
   padding: 1.2rem;
 }
+
+.bar nav {
+  margin-left: auto;
+  display: flex;
+  gap: 0.3rem;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0.35rem 0.75rem;
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.bar nav button.active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.link {
+  background: none;
+  border: none;
+  color: var(--accent);
+  padding: 0;
+  text-decoration: underline;
+}
+
+.notice {
+  margin: 0;
+  padding: 0.6rem 1.2rem;
+  background: color-mix(in srgb, var(--bad) 12%, transparent);
+  border-bottom: 1px solid var(--line);
+}
+
+.panel {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 1rem;
+  margin-bottom: 1rem;
+  background: var(--panel);
+}
+
+.panel h2 {
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  margin: 0 0 0.7rem;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.row + .row {
+  margin-top: 0.8rem;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.mono,
+.log,
+.body {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.8rem;
+}
+
+.detail {
+  color: var(--warn);
+  margin: 0.4rem 0;
+}
+
+.pill {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0.15rem 0.6rem;
+  font-weight: 600;
+}
+
+.pill[data-state='running'] {
+  color: var(--ok);
+  border-color: var(--ok);
+}
+
+.pill[data-state='failed'],
+.pill[data-state='binaryMissing'] {
+  color: var(--bad);
+  border-color: var(--bad);
+}
+
+.pill[data-state='starting'],
+.pill[data-state='restarting'],
+.pill[data-state='stopping'] {
+  color: var(--warn);
+  border-color: var(--warn);
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: 9rem 1fr;
+  gap: 0.35rem 1rem;
+  margin: 0;
+}
+
+.grid dt {
+  color: var(--muted);
+}
+
+.grid dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+label {
+  display: block;
+  margin-bottom: 0.6rem;
+  color: var(--muted);
+}
+
+label.check {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+input,
+textarea {
+  display: block;
+  width: 100%;
+  font: inherit;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0.35rem 0.5rem;
+  margin-top: 0.2rem;
+}
+
+label.check input {
+  width: auto;
+  margin: 0;
+}
+
+.ports {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(7rem, 1fr));
+  gap: 0.6rem;
+}
+
+.log,
+.body {
+  max-height: 22rem;
+  overflow: auto;
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.log .stderr {
+  color: var(--bad);
+}
+
+.log .desktop {
+  color: var(--accent);
+}
+
+code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85em;
+}

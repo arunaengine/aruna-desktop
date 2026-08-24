@@ -1,11 +1,26 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { getVersion } from '@tauri-apps/api/app'
+import EnrollView from './views/EnrollView.vue'
+import SettingsView from './views/SettingsView.vue'
+import StatusView from './views/StatusView.vue'
+import { boot, notice, report, tab } from './lib/store'
+import type { Tab } from './lib/store'
 
 const version = ref('')
+const tabs: Array<{ id: Tab; label: string }> = [
+  { id: 'status', label: 'Status' },
+  { id: 'enroll', label: 'Enroll' },
+  { id: 'settings', label: 'Settings' },
+]
 
 onMounted(async () => {
-  version.value = await getVersion()
+  try {
+    version.value = await getVersion()
+    await boot()
+  } catch (error) {
+    report(error)
+  }
 })
 </script>
 
@@ -13,8 +28,26 @@ onMounted(async () => {
   <header class="bar">
     <h1>Aruna Desktop</h1>
     <span class="version">{{ version }}</span>
+    <nav>
+      <button
+        v-for="entry in tabs"
+        :key="entry.id"
+        :class="{ active: tab === entry.id }"
+        @click="tab = entry.id"
+      >
+        {{ entry.label }}
+      </button>
+    </nav>
   </header>
+
+  <p v-if="notice" class="notice">
+    {{ notice }}
+    <button class="link" @click="notice = ''">dismiss</button>
+  </p>
+
   <main class="page">
-    <p>The native control window for a local Aruna user node.</p>
+    <StatusView v-if="tab === 'status'" />
+    <EnrollView v-else-if="tab === 'enroll'" />
+    <SettingsView v-else />
   </main>
 </template>
