@@ -101,10 +101,11 @@ impl Supervisor {
             .clone()
     }
 
-    /// Resolves the binary, asks the machine what it can compute in, writes the
-    /// node's env file and starts the run loop. A missing binary leaves a
-    /// status the status view can explain.
-    pub async fn start(&self) -> Result<NodeStatus, DesktopError> {
+    /// Resolves the binary and starts the run loop, which probes this machine's
+    /// executors and writes the node's env file before spawning it. Nothing is
+    /// awaited here, so the claim on the run slot stays atomic and a missing
+    /// binary leaves a status the status view can explain.
+    pub fn start(&self) -> Result<NodeStatus, DesktopError> {
         if self
             .inner
             .lock()
@@ -130,14 +131,7 @@ impl Supervisor {
             }
         };
 
-        let plan = compute::detect(settings.compute.backend).await;
-        let env_path = settings.write_env(&self.data_dir, &plan)?;
         self.logs.clear();
-        self.logs.push(
-            Stream::Desktop,
-            format!("starting {} with {}", binary.display(), env_path.display()),
-        );
-
         let (sender, receiver) = oneshot::channel();
         let status = NodeStatus {
             state: NodeState::Starting,
@@ -148,7 +142,7 @@ impl Supervisor {
 
         let supervisor = self.clone();
         let task = tauri::async_runtime::spawn(async move {
-            supervisor.supervise(binary, settings, plan, receiver).await;
+            supervisor.supervise(binary, settings, receiver).await;
         });
 
         let mut inner = self.inner.lock().expect("supervisor poisoned");
@@ -174,16 +168,25 @@ impl Supervisor {
 
     pub async fn restart(&self) -> Result<NodeStatus, DesktopError> {
         self.stop().await;
-        self.start().await
+        self.start()
     }
 
     async fn supervise(
         self,
         binary: PathBuf,
         settings: NodeSettings,
-        plan: compute::ComputePlan,
         mut stop: oneshot::Receiver<()>,
     ) {
+        let plan = compute::detect(settings.compute.backend).await;
+        let env_path = match settings.write_env(&self.data_dir, &plan) {
+            Ok(path) => path,
+            Err(error) => return self.fail(&binary, error.to_string(), 0),
+        };
+        self.logs.push(
+            Stream::Desktop,
+            format!("starting {} with {}", binary.display(), env_path.display()),
+        );
+
         let grace = Duration::from_secs(settings.shutdown_grace_secs);
         let mut restarts = 0;
 
