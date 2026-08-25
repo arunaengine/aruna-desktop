@@ -120,10 +120,11 @@ Notes on the ones that do more than they say:
   slice with the `memory` and `pids` controllers. The node refuses to build the
   apptainer backend without one, so the shell does not choose apptainer while
   `cgroupOk` is false.
-* `reveal_path` shows a path in the owner's file manager. The path is resolved
-  first and must lie inside the owner's home or the node's data directory;
-  anything else is refused the way the wipe guard refuses a path that was never
-  ours, and a path that does not exist is refused too.
+* `reveal_path` shows a path in the owner's file manager. It must be absolute
+  and must exist — a relative one would resolve against the app's own directory,
+  and there is nothing to show for a path that is not there. Where it points is
+  not restricted: revealing opens a window, reads nothing, and the owner's
+  folders live wherever they put them.
 * `enroll_apply` needs only the secret. The seed URL and the realm travel inside
   it; the shell keeps its own copy of both only to watch the join. It clears a
   pause, because enrolling is an explicit "run this node".

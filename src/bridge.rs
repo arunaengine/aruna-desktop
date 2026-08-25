@@ -4,7 +4,7 @@
 //! does not get an answer for is reported as a missing shell half.
 
 use std::fs;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 use tauri::{AppHandle, Manager, State};
@@ -182,32 +182,29 @@ pub async fn compute_probe() -> ComputeProbe {
     node::compute::probe().await
 }
 
-/// Shows a path in the owner's file manager. Only their own home and the
-/// node's data are revealed; anything else is refused, like the wipe guard
-/// refuses a path that was never ours.
+/// Shows a path in the owner's file manager. Nothing is read or written, and
+/// the owner's data lives wherever they put it, so any absolute path that is
+/// there may be shown.
 #[tauri::command]
-pub fn reveal_path(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    path: String,
-) -> Result<(), DesktopError> {
-    let raw = path.trim();
-    let target = fs::canonicalize(raw)
-        .map_err(|_| DesktopError::Settings(format!("there is no {raw} to show")))?;
-    let roots: Vec<PathBuf> = [home(), Some(state.data_dir.clone())]
-        .into_iter()
-        .flatten()
-        .map(resolved)
-        .collect();
-    if !revealable(&target, &roots) {
-        return Err(DesktopError::Settings(format!(
-            "refusing to show {}",
-            target.display()
-        )));
-    }
+pub fn reveal_path(app: AppHandle, path: String) -> Result<(), DesktopError> {
+    let target = reveal_target(&path)?;
     app.opener()
         .reveal_item_in_dir(&target)
         .map_err(|error| DesktopError::Unreachable(error.to_string()))
+}
+
+/// What a reveal may act on: a path the owner named absolutely, resolved, which
+/// is also how one that is not there is refused.
+fn reveal_target(raw: &str) -> Result<PathBuf, DesktopError> {
+    let path = Path::new(raw.trim());
+    if !path.is_absolute() {
+        return Err(DesktopError::Settings(format!(
+            "{} must be an absolute path",
+            path.display()
+        )));
+    }
+    fs::canonicalize(path)
+        .map_err(|_| DesktopError::Settings(format!("there is no {} to show", path.display())))
 }
 
 /// Arms the next node start with a one-time enrollment secret and restarts the
@@ -475,20 +472,8 @@ fn removable(path: &Path, home: Option<&Path>) -> bool {
     path.is_absolute() && path.components().count() > 2 && home.is_none_or(|home| path != home)
 }
 
-/// The owner's data is theirs to look at; the rest of the machine is not. Both
-/// sides are compared resolved, so no link leads out of a root.
-fn revealable(path: &Path, roots: &[PathBuf]) -> bool {
-    path.is_absolute()
-        && !path.components().any(|part| part == Component::ParentDir)
-        && roots.iter().any(|root| path.starts_with(root))
-}
-
 fn home() -> Option<PathBuf> {
     std::env::var_os("HOME").map(PathBuf::from)
-}
-
-fn resolved(path: PathBuf) -> PathBuf {
-    fs::canonicalize(&path).unwrap_or(path)
 }
 
 #[cfg(test)]
@@ -539,19 +524,16 @@ mod tests {
     }
 
     #[test]
-    fn guards_reveal_paths() {
-        let roots = [
-            PathBuf::from("/home/owner"),
-            PathBuf::from("/var/lib/aruna/node"),
-        ];
-        assert!(revealable(Path::new("/home/owner/data/set.csv"), &roots));
-        assert!(revealable(Path::new("/var/lib/aruna/node/storage"), &roots));
-        assert!(!revealable(Path::new("/etc/shadow"), &roots));
-        assert!(!revealable(Path::new("/home/other/data"), &roots));
-        assert!(!revealable(Path::new("relative/path"), &roots));
-        // A traversal that lands back inside a root is still not a path the
-        // owner named.
-        assert!(!revealable(Path::new("/home/owner/../owner/data"), &roots));
+    fn checks_reveal_target() {
+        // Relative input would resolve against the app's own directory, and a
+        // path that is not there has nothing to show.
+        assert!(reveal_target("ui").is_err());
+        assert!(reveal_target("/aruna-desktop-no-such-path").is_err());
+        let here = env!("CARGO_MANIFEST_DIR");
+        assert_eq!(
+            reveal_target(&format!(" {here} ")).expect("this crate"),
+            fs::canonicalize(here).expect("this crate")
+        );
     }
 
     #[test]
