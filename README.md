@@ -128,7 +128,9 @@ Notes on the ones that do more than they say:
   or wants to be sure reads it here.
 * `node_status` reports `ready` beside `state`, because `running` is reached at
   spawn and a node serves a little later: it is the same flag the `node-status`
-  event carries, and the one the shell context follows.
+  event carries, and the one the shell context follows. `apiBaseUrl` follows it
+  too — it is filled only while the node **serves**, never while it is merely
+  running, so it is never an address that would refuse the call.
 * `node_status` is also where a running enrollment is observed: it probes the
   node, advances the join, and spends the one-time secret once the node serves
   the realm. `nodeId` stays `null` — a node reports its own id only to a caller

@@ -125,7 +125,9 @@ pub async fn node_status(
         node_id: None,
         realm: info.realm.or(settings.realm.clone()),
         enrolled: settings.enrolled,
-        api_base_url: (node.state == NodeState::Running).then(|| api_base(&settings)),
+        // A spawned node has bound nothing yet, so naming its base would be an
+        // address that refuses the call.
+        api_base_url: node.ready.then(|| api_base(&settings)),
         version: info.version,
         uptime_seconds: state.supervisor.uptime(),
         message: joining
