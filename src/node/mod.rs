@@ -198,7 +198,19 @@ impl Supervisor {
     }
 
     async fn run(&self, binary: &Path, settings: &NodeSettings, mut stop: oneshot::Receiver<()>) {
-        let plan = compute::detect(settings.compute.backend).await;
+        // A stop arriving while the machine is probed must not be answered with
+        // a node: the probe waits on daemons that may take their time.
+        let plan = tokio::select! {
+            plan = compute::detect(settings.compute.backend) => plan,
+            _ = &mut stop => {
+                self.publish(NodeStatus {
+                    state: NodeState::Stopped,
+                    binary: Some(binary.display().to_string()),
+                    ..NodeStatus::default()
+                });
+                return;
+            }
+        };
         if let Some(note) = plan.note {
             self.logs.push(Stream::Desktop, note.to_string());
         }
