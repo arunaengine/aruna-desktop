@@ -118,12 +118,19 @@ pub fn plan(backend: ComputeBackend, probe: &ComputeProbe) -> ComputePlan {
     }
 }
 
-/// The plan for a node start. Nothing is probed while local compute is off.
+/// The plan for a node start. Only what the choice can still turn on is asked:
+/// a chosen docker is written whatever answers, and compute that is off asks
+/// nothing at all.
 pub async fn detect(backend: ComputeBackend) -> ComputePlan {
-    match backend {
-        ComputeBackend::Off => ComputePlan::default(),
-        _ => plan(backend, &probe().await),
-    }
+    let seen = match backend {
+        ComputeBackend::Off | ComputeBackend::Docker => ComputeProbe::default(),
+        ComputeBackend::Apptainer => ComputeProbe {
+            apptainer: apptainer_probe().await,
+            ..ComputeProbe::default()
+        },
+        ComputeBackend::Auto => probe().await,
+    };
+    plan(backend, &seen)
 }
 
 async fn docker_probe() -> DockerProbe {
