@@ -306,9 +306,9 @@ pub async fn wipe_device(
     let settings = state.settings();
     let storage = settings.storage_dir(&state.data_dir);
     if !storage.starts_with(&state.data_dir) {
-        purge(&storage)?;
+        purge(&app, &storage)?;
     }
-    purge(&state.data_dir)?;
+    purge(&app, &state.data_dir)?;
 
     let mut wiped = settings;
     wiped.wipe();
@@ -453,8 +453,8 @@ async fn settle(
     Ok(tracker.progress.detail.clone())
 }
 
-fn purge(path: &Path) -> Result<(), DesktopError> {
-    if !removable(path, home().as_deref()) {
+fn purge(app: &AppHandle, path: &Path) -> Result<(), DesktopError> {
+    if !removable(path, home(app).as_deref()) {
         return Err(DesktopError::Settings(format!(
             "refusing to delete {}",
             path.display()
@@ -472,8 +472,9 @@ fn removable(path: &Path, home: Option<&Path>) -> bool {
     path.is_absolute() && path.components().count() > 2 && home.is_none_or(|home| path != home)
 }
 
-fn home() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(PathBuf::from)
+/// The owner's home as the platform reports it, which `HOME` is not on Windows.
+fn home(app: &AppHandle) -> Option<PathBuf> {
+    app.path().home_dir().ok()
 }
 
 #[cfg(test)]
