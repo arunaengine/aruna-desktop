@@ -37,6 +37,10 @@ pub struct Features {
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ShellContext {
+    /// Counts the moves this context has made: `0` is what the script injected,
+    /// and every stored change adds one. Events can only ever arrive late, not
+    /// in order, so the portal keeps the highest it has seen and drops the rest.
+    pub revision: u64,
     pub api_base_url: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub auth_callback_origin: Option<String>,
@@ -61,6 +65,8 @@ pub fn context(settings: &NodeSettings, ready: bool) -> ShellContext {
         _ => bridge::api_base(settings),
     };
     ShellContext {
+        // The first context of the app; `advance` numbers every later one.
+        revision: 0,
         api_base_url,
         // The only http origin this device can register with a provider is the
         // node's own portal listener, and only while it serves one.
@@ -124,14 +130,28 @@ fn apply(app: &AppHandle) {
     }
 }
 
-/// Stores `wanted` when it differs and answers the payload to emit; `None`
-/// while the portal already has the context it needs.
+/// Stores `wanted` under the next revision when it points the portal somewhere
+/// else, and answers the payload to emit; `None` while nothing moved.
 fn advance(current: &mut ShellContext, wanted: ShellContext) -> Option<ShellContext> {
-    if *current == wanted {
+    if same_place(current, &wanted) {
         return None;
     }
-    *current = wanted.clone();
-    Some(wanted)
+    let next = ShellContext {
+        revision: current.revision + 1,
+        ..wanted
+    };
+    *current = next.clone();
+    Some(next)
+}
+
+/// Whether two contexts point the portal at the same place. The revision counts
+/// the moves, so a difference in it is not one.
+fn same_place(current: &ShellContext, wanted: &ShellContext) -> bool {
+    *current
+        == ShellContext {
+            revision: current.revision,
+            ..wanted.clone()
+        }
 }
 
 #[cfg(test)]
@@ -205,6 +225,7 @@ mod tests {
     #[test]
     fn writes_the_context_once() {
         let script = init_script(&context(&enrolled(), true));
+        assert!(script.contains("\"revision\":0"));
         assert!(script.contains("\"apiBaseUrl\":\"http://127.0.0.1:34116/api/v1\""));
         assert!(script.contains("\"realmUrl\":\"https://aruna.example\""));
         assert!(script.contains("\"systemBrowserAuth\":true"));
@@ -214,19 +235,25 @@ mod tests {
     }
 
     #[test]
-    fn emits_only_on_change() {
-        // The portal is told once per move, and never told what it already has.
+    fn emits_once_per_move() {
+        // The portal is told once per move, never told what it already has, and
+        // every move it is told about is numbered above the last.
         let mut current = context(&NodeSettings::default(), false);
         let same = current.clone();
+        assert_eq!(current.revision, 0);
         assert!(advance(&mut current, same).is_none());
 
-        let wanted = context(&enrolled(), false);
-        let emitted = advance(&mut current, wanted.clone()).expect("a moved context");
-        assert_eq!(emitted, wanted);
+        let realm = context(&enrolled(), false);
+        let emitted = advance(&mut current, realm.clone()).expect("a moved context");
         assert_eq!(emitted.api_base_url, "https://aruna.example/api/v1");
+        assert_eq!(emitted.revision, 1);
         // What `shell_context` answers from here on.
-        assert_eq!(current, wanted);
-        assert!(advance(&mut current, wanted).is_none());
+        assert_eq!(current, emitted);
+        assert!(advance(&mut current, realm).is_none());
+
+        let serving = advance(&mut current, context(&enrolled(), true)).expect("the node serves");
+        assert_eq!(serving.api_base_url, "http://127.0.0.1:34116/api/v1");
+        assert_eq!(serving.revision, 2);
     }
 
     #[test]
