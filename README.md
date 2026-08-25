@@ -269,7 +269,7 @@ and a stale shell environment cannot leak in.
 | `S3_ADDRESS`, `S3_HOST` | the loopback endpoint while the local S3 listener is on, **empty** while it is off |
 | `S3_PUBLIC_URL` | only while the local S3 endpoint is enabled |
 | `ONBOARDING_SECRET` | the one-time enrollment secret, consumed on the next start |
-| `ARUNA_COMPUTE_*` | the local compute profile below, written only while an executor was resolved |
+| `ARUNA_COMPUTE_EXECUTOR` | the resolved backend, or `off`; the rest of the profile follows below |
 
 The ports are fixed on loopback so the portal origin and the OIDC redirect URI
 can be registered up front.
@@ -298,12 +298,15 @@ Two rows of the env table are the device profile itself:
 The owner may run their own jobs on this machine (**never** the realm's: the
 node is told so explicitly). Before every node start the shell probes the
 machine, resolves the owner's `backend` choice against what answered, and writes
-the profile below. Nothing of it is written when no executor was resolved —
-`off`, or `auto` on a machine with neither backend — which leaves compute off.
+the profile below. `ARUNA_COMPUTE_EXECUTOR` is **always** written — `off` when
+nothing was resolved, which is `off` itself or a machine with no usable backend
+— and the rest of the profile only while an executor was resolved. The
+supervisor also strips every inherited `ARUNA_COMPUTE_*` key from the child, so
+the environment the app was launched from cannot configure the node's compute.
 
 | Key | Value written by the app |
 | --- | --- |
-| `ARUNA_COMPUTE_EXECUTOR` | `docker` or `apptainer`, the resolved backend |
+| `ARUNA_COMPUTE_EXECUTOR` | `docker` or `apptainer`, the resolved backend, or `off` |
 | `ARUNA_COMPUTE_OPTIONAL` | `1`; a missing daemon leaves the node up without compute |
 | `ARUNA_COMPUTE_LOCAL_ONLY` | `1`; the device profile has no S3 listener to hand a container |
 | `ARUNA_COMPUTE_MAX_CONCURRENT` | the owner's concurrent-run ceiling, `1` by default |

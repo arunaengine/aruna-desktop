@@ -409,7 +409,9 @@ impl NodeSettings {
     /// it is omitted while no executor was resolved, which leaves compute off.
     fn compute_pairs(&self, data_dir: &Path, compute: &ComputePlan) -> Vec<(String, String)> {
         let Some(executor) = compute.executor else {
-            return Vec::new();
+            // Written rather than omitted: the node must be told compute is off
+            // even when the environment the app was launched from says otherwise.
+            return vec![("ARUNA_COMPUTE_EXECUTOR".to_string(), "off".to_string())];
         };
         let mut pairs = vec![
             (
@@ -662,11 +664,17 @@ mod tests {
     }
 
     #[test]
-    fn omits_idle_compute() {
-        // No executor resolved means the node is told nothing about compute,
-        // which leaves it off rather than half configured.
+    fn turns_compute_off() {
+        // No executor resolved is stated, not left out: the node has to be told
+        // even when the launching environment claims otherwise.
         let map = pairs(&NodeSettings::default());
-        assert!(!map.keys().any(|key| key.starts_with("ARUNA_COMPUTE_")));
+        assert_eq!(map["ARUNA_COMPUTE_EXECUTOR"], "off");
+        assert_eq!(
+            map.keys()
+                .filter(|key| key.starts_with("ARUNA_COMPUTE_"))
+                .count(),
+            1
+        );
     }
 
     #[test]

@@ -282,6 +282,13 @@ impl Supervisor {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
+        // The compute profile is written key by key, so an inherited one would
+        // survive in the keys this start does not write: drop them all first.
+        for (key, _) in std::env::vars_os() {
+            if key.to_string_lossy().starts_with("ARUNA_COMPUTE_") {
+                command.env_remove(key);
+            }
+        }
         // Set explicitly as well as in the env file: dotenvy never overrides an
         // inherited value, so a stale desktop environment must not leak in.
         for (key, value) in settings.env_pairs(&self.data_dir, plan) {
