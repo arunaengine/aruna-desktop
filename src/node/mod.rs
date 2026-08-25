@@ -178,6 +178,9 @@ impl Supervisor {
         mut stop: oneshot::Receiver<()>,
     ) {
         let plan = compute::detect(settings.compute.backend).await;
+        if let Some(note) = plan.note {
+            self.logs.push(Stream::Desktop, note.to_string());
+        }
         let env_path = match settings.write_env(&self.data_dir, &plan) {
             Ok(path) => path,
             Err(error) => return self.fail(&binary, error.to_string(), 0),

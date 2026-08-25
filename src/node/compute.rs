@@ -62,7 +62,7 @@ pub struct ApptainerProbe {
     pub available: bool,
     pub version: Option<String>,
     /// Whether this session owns a delegated cgroup slice apptainer can put a
-    /// job into. Without one the node still runs jobs, but without limits.
+    /// job into. The node refuses to build the backend without one.
     pub cgroup_ok: bool,
     pub cgroup_root: Option<String>,
 }
@@ -72,7 +72,12 @@ pub struct ApptainerProbe {
 pub struct ComputePlan {
     pub executor: Option<Executor>,
     pub cgroup_root: Option<String>,
+    /// Why the owner's choice was dropped, for the desktop log.
+    pub note: Option<&'static str>,
 }
+
+const NO_SLICE: &str = "apptainer needs a delegated user cgroup slice; local compute stays off";
+const NO_BACKEND: &str = "no local container backend answered; local compute stays off";
 
 /// Asks both backends what they are, in parallel. A missing binary is an
 /// unavailable backend, never a failure.
@@ -81,16 +86,18 @@ pub async fn probe() -> ComputeProbe {
     ComputeProbe { docker, apptainer }
 }
 
-/// The owner's choice against what the machine has. `Auto` prefers docker
-/// because it needs no delegated cgroup; an explicit choice is honoured even
-/// when the probe found nothing, so the node reports the real reason.
+/// The owner's choice against what the machine has. Apptainer is only ever
+/// chosen with a delegated slice, because the node refuses to build it without
+/// one; a chosen docker is honoured whatever the probe found, so the node
+/// reports the real reason instead of the shell picking something else.
 pub fn resolve(backend: ComputeBackend, probe: &ComputeProbe) -> Option<Executor> {
+    let slice = probe.apptainer.cgroup_ok;
     match backend {
         ComputeBackend::Off => None,
         ComputeBackend::Docker => Some(Executor::Docker),
-        ComputeBackend::Apptainer => Some(Executor::Apptainer),
+        ComputeBackend::Apptainer => slice.then_some(Executor::Apptainer),
         ComputeBackend::Auto if probe.docker.available => Some(Executor::Docker),
-        ComputeBackend::Auto if probe.apptainer.available => Some(Executor::Apptainer),
+        ComputeBackend::Auto if probe.apptainer.available && slice => Some(Executor::Apptainer),
         ComputeBackend::Auto => None,
     }
 }
@@ -100,6 +107,11 @@ pub fn plan(backend: ComputeBackend, probe: &ComputeProbe) -> ComputePlan {
     ComputePlan {
         cgroup_root: match executor {
             Some(Executor::Apptainer) => probe.apptainer.cgroup_root.clone(),
+            _ => None,
+        },
+        note: match (backend, executor) {
+            (ComputeBackend::Apptainer, None) => Some(NO_SLICE),
+            (ComputeBackend::Auto, None) => Some(NO_BACKEND),
             _ => None,
         },
         executor,
@@ -262,6 +274,20 @@ mod tests {
         );
         assert!(resolve(ComputeBackend::Auto, &seen(false, false)).is_none());
         assert!(resolve(ComputeBackend::Off, &seen(true, true)).is_none());
+    }
+
+    #[test]
+    fn needs_cgroup_slice() {
+        // The node exits when apptainer cannot put a job into a delegated
+        // slice, so an executor without one would only take the node down.
+        let mut probe = seen(false, true);
+        probe.apptainer.cgroup_ok = false;
+        probe.apptainer.cgroup_root = None;
+        assert!(resolve(ComputeBackend::Auto, &probe).is_none());
+        assert!(resolve(ComputeBackend::Apptainer, &probe).is_none());
+        assert_eq!(plan(ComputeBackend::Apptainer, &probe).note, Some(NO_SLICE));
+        assert_eq!(plan(ComputeBackend::Auto, &probe).note, Some(NO_BACKEND));
+        assert!(plan(ComputeBackend::Docker, &probe).note.is_none());
     }
 
     #[test]

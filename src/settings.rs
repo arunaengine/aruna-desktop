@@ -692,7 +692,7 @@ mod tests {
         };
         let plan = ComputePlan {
             executor: Some(Executor::Docker),
-            cgroup_root: None,
+            ..ComputePlan::default()
         };
         let map = planned(&settings, &plan);
         assert_eq!(map["ARUNA_COMPUTE_EXECUTOR"], "docker");
@@ -720,6 +720,7 @@ mod tests {
         let plan = ComputePlan {
             executor: Some(Executor::Apptainer),
             cgroup_root: Some("/sys/fs/cgroup/user.slice/user@1000.service".into()),
+            ..ComputePlan::default()
         };
         let keys: Vec<String> = settings
             .env_pairs(Path::new("/data"), &plan)

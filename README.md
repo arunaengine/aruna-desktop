@@ -117,8 +117,9 @@ Notes on the ones that do more than they say:
   a short timeout, so `available` means the daemon answered rather than that a
   client is installed. A backend that is not installed is unavailable, never an
   error. `cgroupOk` reports whether this login session owns a delegated cgroup
-  slice with the `memory` and `pids` controllers, which is what apptainer needs
-  to hold a job to its limits.
+  slice with the `memory` and `pids` controllers. The node refuses to build the
+  apptainer backend without one, so the shell does not choose apptainer while
+  `cgroupOk` is false.
 * `reveal_path` shows a path in the owner's file manager. The path is resolved
   first and must lie inside the owner's home or the node's data directory;
   anything else is refused the way the wipe guard refuses a path that was never
@@ -312,7 +313,7 @@ the environment the app was launched from cannot configure the node's compute.
 | `ARUNA_COMPUTE_MAX_CONCURRENT` | the owner's concurrent-run ceiling, `1` by default |
 | `ARUNA_COMPUTE_MAX_CPU_CORES`, `ARUNA_COMPUTE_MAX_RAM_BYTES`, `ARUNA_COMPUTE_MAX_DISK_BYTES` | each written only while the owner set it; unset means no ceiling |
 | `ARUNA_COMPUTE_KEEP_FAILED` | `1` while the owner keeps failed jobs for inspection |
-| `ARUNA_COMPUTE_APPTAINER_CGROUP_ROOT` | the delegated user slice, when apptainer runs and one was detected |
+| `ARUNA_COMPUTE_APPTAINER_CGROUP_ROOT` | the delegated user slice; apptainer is only ever chosen with one |
 | `ARUNA_COMPUTE_STATE_ROOT` | `<app data>/node/compute` |
 | `ARUNA_COMPUTE_APPTAINER_STATE_ROOT`, `ARUNA_COMPUTE_APPTAINER_SIF_CACHE` | `…/compute/apptainer` and `…/compute/sif` (apptainer only) |
 
@@ -323,9 +324,11 @@ profile's own additions and are being finalised on the node side; the rest the
 node reads today.
 
 `auto` prefers docker, because it needs no delegated cgroup of ours, and falls
-back to apptainer. An explicit `docker` or `apptainer` is written whatever the
-probe found, so the node reports the real reason it could not build one instead
-of the shell silently choosing another.
+back to apptainer **only** where a delegated user slice was detected. Apptainer
+the owner asked for is dropped the same way when no slice was found, with a line
+in the node's log saying so: without one the node exits instead of starting.
+A chosen `docker` is written whatever the probe found, so the node reports the
+real reason it could not build one instead of the shell picking another.
 
 ## Settings the owner sees
 
