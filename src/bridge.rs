@@ -473,16 +473,12 @@ mod tests {
     fn reads_a_settings_patch() {
         // The portal sends whichever fields it changed, in camelCase.
         let patch: SettingsPatch = serde_json::from_value(serde_json::json!({
-            "offeredDirectories": ["/home/owner/data"],
+            "storagePath": "/home/owner/aruna",
             "paused": true,
         }))
         .expect("the portal's shape");
-        assert_eq!(
-            patch.offered_directories.as_deref(),
-            Some(&["/home/owner/data".to_string()][..])
-        );
+        assert_eq!(patch.storage_path.as_deref(), Some("/home/owner/aruna"));
         assert_eq!(patch.paused, Some(true));
-        assert!(patch.storage_path.is_none());
         assert!(patch.auto_start.is_none());
     }
 }

@@ -52,14 +52,13 @@ impl Default for NodePorts {
     }
 }
 
-/// The local control surface the portal renders: where the node stores data,
-/// what it offers, and whether it runs. Everything else the desktop keeps is
-/// machine configuration the owner never has to see.
+/// The local control surface the portal renders: where the node stores data
+/// and whether it runs. Everything else the desktop keeps is machine
+/// configuration the owner never has to see.
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct LocalSettings {
     pub storage_path: String,
-    pub offered_directories: Vec<String>,
     pub paused: bool,
     pub auto_start: bool,
 }
@@ -69,7 +68,6 @@ pub struct LocalSettings {
 #[serde(rename_all = "camelCase", default)]
 pub struct SettingsPatch {
     pub storage_path: Option<String>,
-    pub offered_directories: Option<Vec<String>>,
     pub paused: Option<bool>,
     pub auto_start: Option<bool>,
 }
@@ -83,9 +81,6 @@ pub struct NodeSettings {
     pub binary_path: Option<PathBuf>,
     /// Defaults to `<app data>/node/storage`.
     pub storage_path: Option<PathBuf>,
-    /// Directories the owner offers to the realm. Kept for the portal; realm
-    /// nodes pull them from the node itself, which reads them over its REST.
-    pub offered_directories: Vec<PathBuf>,
     /// Keeps the node stopped until the owner resumes it, across launches.
     pub paused: bool,
     /// The device name the owner typed when enrolling. Display only: the realm
@@ -124,7 +119,6 @@ impl Default for NodeSettings {
         Self {
             binary_path: None,
             storage_path: None,
-            offered_directories: Vec::new(),
             paused: false,
             device_label: None,
             portal_dir: None,
@@ -190,11 +184,6 @@ impl NodeSettings {
     pub fn local(&self, data_dir: &Path) -> LocalSettings {
         LocalSettings {
             storage_path: self.storage_dir(data_dir).display().to_string(),
-            offered_directories: self
-                .offered_directories
-                .iter()
-                .map(|path| path.display().to_string())
-                .collect(),
             paused: self.paused,
             auto_start: self.auto_start,
         }
@@ -210,14 +199,6 @@ impl NodeSettings {
                 false => Some(absolute("the storage location", &raw)?),
             };
         }
-        if let Some(offered) = patch.offered_directories {
-            let mut paths = Vec::with_capacity(offered.len());
-            for raw in offered {
-                paths.push(absolute("an offered directory", &raw)?);
-            }
-            paths.dedup();
-            self.offered_directories = paths;
-        }
         if let Some(paused) = patch.paused {
             self.paused = paused;
         }
@@ -227,8 +208,9 @@ impl NodeSettings {
         Ok(())
     }
 
-    /// Forgets this device: the enrollment, what it offered, and where its data
-    /// was. The machine configuration stays, so the app is usable afterwards.
+    /// Forgets this device: the enrollment and where its data was. The machine
+    /// configuration stays, so the app is usable afterwards. Synced folders
+    /// live in the node and go with `/device/wipe`.
     pub fn wipe(&mut self) {
         self.onboarding_secret = None;
         self.seed_url = None;
@@ -237,7 +219,6 @@ impl NodeSettings {
         self.enrolled = false;
         self.paused = false;
         self.storage_path = None;
-        self.offered_directories.clear();
     }
 
     /// Remembers the realm the portal window opens and where its API answers.
@@ -498,7 +479,18 @@ mod tests {
         // The panel edits what the node uses, so an unset path is not blank.
         let view = NodeSettings::default().local(Path::new("/data"));
         assert_eq!(view.storage_path, "/data/storage");
-        assert!(view.offered_directories.is_empty());
+    }
+
+    #[test]
+    fn ignores_dropped_fields() {
+        // A settings file written before synced folders moved into the node
+        // still loads: offered directories are simply not read any more.
+        let stored: NodeSettings = serde_json::from_str(
+            r#"{"offeredDirectories":["/home/o/data"],"autoStart":true,"paused":true}"#,
+        )
+        .expect("an older settings file");
+        assert!(stored.auto_start);
+        assert!(stored.paused);
     }
 
     #[test]
@@ -510,16 +502,11 @@ mod tests {
         settings
             .apply(SettingsPatch {
                 paused: Some(true),
-                offered_directories: Some(vec!["/home/o/data".into()]),
                 ..SettingsPatch::default()
             })
             .expect("a usable patch");
         assert!(settings.paused);
         assert!(settings.auto_start);
-        assert_eq!(
-            settings.offered_directories,
-            [PathBuf::from("/home/o/data")]
-        );
         assert!(settings.storage_path.is_none());
     }
 
@@ -532,14 +519,6 @@ mod tests {
             settings
                 .apply(SettingsPatch {
                     storage_path: Some("node/storage".into()),
-                    ..SettingsPatch::default()
-                })
-                .is_err()
-        );
-        assert!(
-            settings
-                .apply(SettingsPatch {
-                    offered_directories: Some(vec!["data".into()]),
                     ..SettingsPatch::default()
                 })
                 .is_err()
@@ -559,7 +538,6 @@ mod tests {
         let mut settings = NodeSettings {
             binary_path: Some(PathBuf::from("/opt/aruna")),
             storage_path: Some(PathBuf::from("/data/elsewhere")),
-            offered_directories: vec![PathBuf::from("/home/o/data")],
             paused: true,
             ..NodeSettings::default()
         };
@@ -573,7 +551,6 @@ mod tests {
         assert!(settings.seed_url.is_none());
         assert!(settings.onboarding_secret.is_none());
         assert!(settings.storage_path.is_none());
-        assert!(settings.offered_directories.is_empty());
         assert!(!settings.paused);
         assert_eq!(settings.realm_url.as_deref(), Some("https://aruna.example"));
         assert_eq!(settings.binary_path, Some(PathBuf::from("/opt/aruna")));

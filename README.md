@@ -88,7 +88,7 @@ reports as a missing bridge half rather than a failed call.
 | --- | --- | --- |
 | `node_status` | – | `{state, nodeId, realm, enrolled, apiBaseUrl, version, uptimeSeconds, message}` |
 | `node_logs_tail` | `{lines}` | the last lines of the node's output, oldest first |
-| `node_settings_get` | – | `{storagePath, offeredDirectories, paused, autoStart}` |
+| `node_settings_get` | – | `{storagePath, paused, autoStart}` |
 | `node_settings_set` | `{settings}` (any subset) | the stored settings |
 | `enroll_apply` | `{secret, seedUrl?, realm?, label?}` | `{nodeId, realm}` |
 | `wipe_device` | `{confirm}` | – |
@@ -105,17 +105,18 @@ Notes on the ones that do more than they say:
   holding a realm token, which the shell never has, so the portal reads it with
   the owner's own.
 * `node_settings_set` stops the node when `paused` turns on and starts it when
-  it turns off. Every other field reaches the node on its next start. Offered
-  directories are stored for the portal; realm nodes pull them from the node.
+  it turns off. Every other field reaches the node on its next start. Synced
+  folders are **not** shell settings: they live in the node, are bound through
+  its `/device/folders` API and are wiped by `/device/wipe`.
 * `enroll_apply` needs only the secret. The seed URL and the realm travel inside
   it; the shell keeps its own copy of both only to watch the join. It clears a
   pause, because enrolling is an explicit "run this node".
 * `wipe_device` re-checks `confirm` against `wipe`, stops the node, deletes the
   data directory the shell provisioned (and a storage directory outside it),
-  clears the enrollment, the offered directories and the storage override, and
-  keeps the machine configuration. A path that is not deep enough to be one of
-  ours is refused rather than deleted. The node's own REST wipe is a separate
-  surface.
+  clears the enrollment and the storage override, and keeps the machine
+  configuration. A path that is not deep enough to be one of ours is refused
+  rather than deleted. The node's own REST wipe is a separate surface, and it
+  is the one that drops the device's synced folders.
 * `validate_realm` checks the address, **remembers it** as this device's realm
   and answers with the origin. Remembering is the point: it is what the portal
   talks to until a node of this device's own is running.
