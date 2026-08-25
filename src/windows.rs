@@ -45,15 +45,16 @@ pub fn open_main(
     )
 }
 
-/// Swaps the app window for one carrying `context`, on the page the old one was
-/// showing. The new window is opened before the old one is destroyed, so the
-/// app is never briefly without a window.
+/// Swaps the window labelled `current` for one carrying `context`, on the page
+/// the old one was showing. The new window is opened before the old one is
+/// destroyed, so the app is never briefly without a window.
 pub fn replace_main(
     app: &AppHandle,
+    current: &str,
     label: &str,
     context: &ShellContext,
 ) -> Result<(), DesktopError> {
-    let current = main(app);
+    let current = app.get_webview_window(current);
     let path = current
         .as_ref()
         .and_then(|window| window.url().ok())

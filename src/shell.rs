@@ -138,13 +138,18 @@ fn apply(app: &AppHandle) -> bool {
     let running = state.supervisor.status().state == NodeState::Running;
     let wanted = context(&state.settings(), running);
 
-    let mut shell = state.shell.lock().expect("shell poisoned");
-    if shell.context == wanted {
-        return false;
-    }
-    let label = next_label(&shell.label);
-    match windows::replace_main(app, &label, &wanted) {
+    // The lock is not held across the swap: window creation and the callers
+    // that look the window up by its label both need it.
+    let (current, label) = {
+        let shell = state.shell.lock().expect("shell poisoned");
+        if shell.context == wanted {
+            return false;
+        }
+        (shell.label.clone(), next_label(&shell.label))
+    };
+    match windows::replace_main(app, &current, &label, &wanted) {
         Ok(()) => {
+            let mut shell = state.shell.lock().expect("shell poisoned");
             shell.context = wanted;
             shell.label = label;
         }
