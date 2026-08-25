@@ -1,11 +1,15 @@
 use std::path::PathBuf;
 
-use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
+use serde::Serialize;
+use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
 use crate::error::DesktopError;
 use crate::shell::{self, ShellContext};
 
 pub const MAIN_LABEL: &str = "main";
+
+/// Emitted to the app window when a deep link belongs in the portal's router.
+pub const NAVIGATE_EVENT: &str = "navigate";
 
 /// What the window opens on; Tauri reads it as the app root.
 const ROOT: &str = "index.html";
@@ -38,15 +42,36 @@ pub fn open_main(app: &AppHandle, context: &ShellContext) -> Result<WebviewWindo
     )
 }
 
-/// Sends the app window to a route of the portal it is already showing. The
-/// portal is a single-page app, so this is how a deep link reaches its router.
+/// Where a deep link wants the portal's router: a route of the portal root,
+/// carrying the query and fragment the link arrived with.
+#[derive(Clone, Debug, Serialize)]
+struct Navigate {
+    path: String,
+}
+
+/// Asks the portal to route somewhere, and brings the window forward. It is an
+/// event rather than a navigation: loading the URL would reload the page and
+/// drop the session and the context the portal has already built.
 pub fn navigate_main(app: &AppHandle, path: &str) -> Result<(), DesktopError> {
-    let window = main(app).ok_or(DesktopError::Tauri(tauri::Error::WebviewNotFound))?;
-    let target = window
-        .url()?
-        .join(path)
-        .map_err(|error| DesktopError::DeepLink(error.to_string()))?;
-    window.navigate(target)?;
+    let route = Navigate {
+        path: path.to_string(),
+    };
+    app.emit_to(MAIN_LABEL, NAVIGATE_EVENT, route)?;
     focus_main(app);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn names_the_route() {
+        // The portal reads one key, and it is a route of its own router.
+        let route = Navigate {
+            path: "/auth/callback?code=x#state=y".into(),
+        };
+        let json = serde_json::to_string(&route).expect("a serializable route");
+        assert_eq!(json, r#"{"path":"/auth/callback?code=x#state=y"}"#);
+    }
 }

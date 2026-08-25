@@ -141,8 +141,8 @@ fn apply_enroll(app: &AppHandle, url: &Url) {
     let seed = link.seed.clone();
     let realm = link.realm.clone();
     let app = app.clone();
-    // The device page shows the enrollment whether or not the event lands, so
-    // a link followed into a cold start still arrives somewhere useful.
+    // A cold start can route before the portal listens; `enroll_invite_last` is
+    // what makes the enrollment visible either way.
     if let Err(error) = windows::navigate_main(&app, DEVICE_ROUTE) {
         tracing::warn!(%error, "Could not open the device page");
     }
@@ -211,9 +211,10 @@ fn non_empty(value: &str) -> Option<String> {
     (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
 
-/// The portal owns the OIDC exchange, so the callback is handed to its router:
-/// the app window is sent to the callback route with everything the provider
-/// returned, and the page that already runs there finishes the sign-in.
+/// The portal owns the OIDC exchange, so the callback is handed to its router
+/// with everything the provider returned, and the page that already runs there
+/// finishes the sign-in. A sign-in the owner started in this app has a portal
+/// listening by definition.
 fn forward_auth(app: &AppHandle, url: &Url) {
     if let Err(error) = windows::navigate_main(app, &callback_route(url)) {
         tracing::warn!(%error, "Could not forward the auth callback");
