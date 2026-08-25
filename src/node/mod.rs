@@ -58,6 +58,9 @@ struct Inner {
     started: Option<std::time::Instant>,
     stop: Option<oneshot::Sender<()>>,
     task: Option<tauri::async_runtime::JoinHandle<()>>,
+    /// Which start owns the run slot, so an older run loop ending cannot free
+    /// a slot a newer start already claimed.
+    generation: u64,
 }
 
 /// Owns the node child process: one run loop per start, restarts on unexpected
@@ -101,27 +104,31 @@ impl Supervisor {
             .clone()
     }
 
-    /// Resolves the binary and starts the run loop, which probes this machine's
-    /// executors and writes the node's env file before spawning it. Nothing is
-    /// awaited here, so the claim on the run slot stays atomic and a missing
-    /// binary leaves a status the status view can explain.
+    /// Starts the run loop, which probes this machine and writes the node's env
+    /// file before spawning it. The run slot is claimed first, so a second
+    /// start finds it taken instead of supervising a second node.
     pub fn start(&self) -> Result<NodeStatus, DesktopError> {
-        if self
-            .inner
-            .lock()
-            .expect("supervisor poisoned")
-            .task
-            .is_some()
-        {
-            return Ok(self.status());
-        }
+        let (sender, receiver) = oneshot::channel();
+        let generation = {
+            let mut inner = self.inner.lock().expect("supervisor poisoned");
+            if inner.task.is_some() || inner.stop.is_some() {
+                return Ok(inner.status.clone());
+            }
+            inner.generation += 1;
+            inner.stop = Some(sender);
+            inner.generation
+        };
 
         let settings = self.settings.lock().expect("settings poisoned").clone();
-        settings.validate()?;
+        if let Err(error) = settings.validate() {
+            self.release(generation);
+            return Err(error);
+        }
 
         let binary = match binary::resolve(&settings, self.resources.as_deref()) {
             Ok(path) => path,
             Err(error) => {
+                self.release(generation);
                 self.publish(NodeStatus {
                     state: NodeState::BinaryMissing,
                     detail: Some(error.to_string()),
@@ -132,7 +139,6 @@ impl Supervisor {
         };
 
         self.logs.clear();
-        let (sender, receiver) = oneshot::channel();
         let status = NodeStatus {
             state: NodeState::Starting,
             binary: Some(binary.display().to_string()),
@@ -142,13 +148,21 @@ impl Supervisor {
 
         let supervisor = self.clone();
         let task = tauri::async_runtime::spawn(async move {
-            supervisor.supervise(binary, settings, receiver).await;
+            supervisor
+                .supervise(binary, settings, generation, receiver)
+                .await;
         });
-
-        let mut inner = self.inner.lock().expect("supervisor poisoned");
-        inner.stop = Some(sender);
-        inner.task = Some(task);
+        self.inner.lock().expect("supervisor poisoned").task = Some(task);
         Ok(status)
+    }
+
+    /// Frees the run slot, unless a later start already claimed it.
+    fn release(&self, generation: u64) {
+        let mut inner = self.inner.lock().expect("supervisor poisoned");
+        if inner.generation == generation {
+            inner.stop = None;
+            inner.task = None;
+        }
     }
 
     /// Signals the run loop and waits for the child to be gone.
@@ -175,15 +189,22 @@ impl Supervisor {
         self,
         binary: PathBuf,
         settings: NodeSettings,
-        mut stop: oneshot::Receiver<()>,
+        generation: u64,
+        stop: oneshot::Receiver<()>,
     ) {
+        self.run(&binary, &settings, stop).await;
+        // However the loop ended, the next start has to be able to claim it.
+        self.release(generation);
+    }
+
+    async fn run(&self, binary: &Path, settings: &NodeSettings, mut stop: oneshot::Receiver<()>) {
         let plan = compute::detect(settings.compute.backend).await;
         if let Some(note) = plan.note {
             self.logs.push(Stream::Desktop, note.to_string());
         }
         let env_path = match settings.write_env(&self.data_dir, &plan) {
             Ok(path) => path,
-            Err(error) => return self.fail(&binary, error.to_string(), 0),
+            Err(error) => return self.fail(binary, error.to_string(), 0),
         };
         self.logs.push(
             Stream::Desktop,
@@ -194,10 +215,10 @@ impl Supervisor {
         let mut restarts = 0;
 
         loop {
-            let mut child = match self.spawn_node(&binary, &settings, &plan) {
+            let mut child = match self.spawn_node(binary, settings, &plan) {
                 Ok(child) => child,
                 Err(error) => {
-                    self.fail(&binary, error.to_string(), restarts);
+                    self.fail(binary, error.to_string(), restarts);
                     return;
                 }
             };
@@ -242,7 +263,7 @@ impl Supervisor {
             restarts += 1;
             if restarts > MAX_RESTARTS {
                 self.fail(
-                    &binary,
+                    binary,
                     format!("gave up after {MAX_RESTARTS} restarts"),
                     restarts - 1,
                 );
