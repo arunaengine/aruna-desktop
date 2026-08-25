@@ -393,12 +393,25 @@ impl Supervisor {
             NodeState::Running => inner.started.or_else(|| Some(std::time::Instant::now())),
             _ => None,
         };
+        let flipped = flips(inner.status.state, status.state);
         inner.status = status.clone();
         drop(inner);
         if let Err(error) = self.app.emit(STATUS_EVENT, status) {
             tracing::warn!(%error, "Could not emit the node status");
         }
+        // Only after this state is published, so the context the portal is told
+        // about is the one it reads back.
+        if flipped {
+            crate::shell::sync(&self.app);
+        }
     }
+}
+
+/// Whether a transition crosses `Running`, which is the half of the shell
+/// context the node owns: an enrolled node that is up is what the portal talks
+/// to, and anything else sends it back to the realm.
+fn flips(before: NodeState, after: NodeState) -> bool {
+    (before == NodeState::Running) != (after == NodeState::Running)
 }
 
 fn describe_exit(code: Option<i32>) -> String {
@@ -429,4 +442,24 @@ fn signal_term(pid: u32) -> bool {
 #[cfg(not(unix))]
 fn signal_term(_pid: u32) -> bool {
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn flips_on_running() {
+        // Reaching and leaving `Running` is what moves the shell context; the
+        // states on the way there leave the portal where it is.
+        assert!(flips(NodeState::Starting, NodeState::Running));
+        assert!(flips(NodeState::Running, NodeState::Stopping));
+        assert!(flips(NodeState::Running, NodeState::Stopped));
+        assert!(flips(NodeState::Running, NodeState::Restarting));
+        assert!(flips(NodeState::Running, NodeState::Failed));
+        assert!(!flips(NodeState::Stopped, NodeState::Starting));
+        assert!(!flips(NodeState::Starting, NodeState::BinaryMissing));
+        assert!(!flips(NodeState::Restarting, NodeState::Stopped));
+        assert!(!flips(NodeState::Running, NodeState::Running));
+    }
 }
