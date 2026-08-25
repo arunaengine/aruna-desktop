@@ -92,8 +92,14 @@ pub fn run() {
                 }
             });
 
-            if auto_start && let Err(error) = handle.state::<AppState>().supervisor.start() {
-                tracing::warn!(%error, "Could not start the node");
+            // The start probes this machine's executors, so it leaves setup.
+            if auto_start {
+                let starter = handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Err(error) = starter.state::<AppState>().supervisor.start().await {
+                        tracing::warn!(%error, "Could not start the node");
+                    }
+                });
             }
             Ok(())
         })

@@ -149,7 +149,7 @@ pub async fn node_settings_set(
         // A device with no node binary stays a usable app, so a failed resume
         // is left in the status rather than refusing the setting.
         Some(false) => {
-            if let Err(error) = state.supervisor.start() {
+            if let Err(error) = state.supervisor.start().await {
                 tracing::warn!(%error, "Could not resume the node");
             }
         }

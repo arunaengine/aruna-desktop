@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::error::DesktopError;
+use crate::node::compute::{ComputePlan, Executor};
 
 /// Loopback ports the desktop pins for the local node. They are fixed so the
 /// portal origin and the OIDC redirect URI stay registrable up front.
@@ -344,8 +345,9 @@ impl NodeSettings {
         format!("http://127.0.0.1:{}", self.ports.api)
     }
 
-    /// The node's whole configuration surface, in a stable order.
-    pub fn env_pairs(&self, data_dir: &Path) -> Vec<(String, String)> {
+    /// The node's whole configuration surface, in a stable order. The compute
+    /// plan comes from the machine probe, so it is passed in rather than stored.
+    pub fn env_pairs(&self, data_dir: &Path, compute: &ComputePlan) -> Vec<(String, String)> {
         let mut pairs = vec![
             (
                 "STORAGE_PATH".to_string(),
@@ -395,6 +397,7 @@ impl NodeSettings {
         if let Some(secret) = self.onboarding_secret.as_ref().filter(|s| !s.is_empty()) {
             pairs.push(("ONBOARDING_SECRET".to_string(), secret.clone()));
         }
+        pairs.append(&mut self.compute_pairs(data_dir, compute));
 
         for (key, value) in &self.extra_env {
             pairs.push((key.clone(), value.clone()));
@@ -402,13 +405,80 @@ impl NodeSettings {
         pairs
     }
 
+    /// What the node needs to run the owner's own jobs and nothing else. All of
+    /// it is omitted while no executor was resolved, which leaves compute off.
+    fn compute_pairs(&self, data_dir: &Path, compute: &ComputePlan) -> Vec<(String, String)> {
+        let Some(executor) = compute.executor else {
+            return Vec::new();
+        };
+        let mut pairs = vec![
+            (
+                "ARUNA_COMPUTE_EXECUTOR".to_string(),
+                executor.as_str().to_string(),
+            ),
+            // The node stays up when the backend is missing, and it runs only
+            // what the owner submits here: never realm work, never a listener.
+            ("ARUNA_COMPUTE_OPTIONAL".to_string(), "1".to_string()),
+            ("ARUNA_COMPUTE_LOCAL_ONLY".to_string(), "1".to_string()),
+            (
+                "ARUNA_COMPUTE_MAX_CONCURRENT".to_string(),
+                self.compute.max_concurrent.to_string(),
+            ),
+        ];
+        for (key, value) in [
+            (
+                "ARUNA_COMPUTE_MAX_CPU_CORES",
+                self.compute.max_cpu_cores.map(u64::from),
+            ),
+            ("ARUNA_COMPUTE_MAX_RAM_BYTES", self.compute.max_ram_bytes),
+            ("ARUNA_COMPUTE_MAX_DISK_BYTES", self.compute.max_disk_bytes),
+        ] {
+            if let Some(value) = value {
+                pairs.push((key.to_string(), value.to_string()));
+            }
+        }
+        if self.compute.keep_failed {
+            pairs.push(("ARUNA_COMPUTE_KEEP_FAILED".to_string(), "1".to_string()));
+        }
+        if let Some(root) = &compute.cgroup_root {
+            pairs.push((
+                "ARUNA_COMPUTE_APPTAINER_CGROUP_ROOT".to_string(),
+                root.clone(),
+            ));
+        }
+
+        let state_root = compute_dir(data_dir);
+        pairs.push((
+            "ARUNA_COMPUTE_STATE_ROOT".to_string(),
+            state_root.display().to_string(),
+        ));
+        if executor == Executor::Apptainer {
+            pairs.push((
+                "ARUNA_COMPUTE_APPTAINER_STATE_ROOT".to_string(),
+                state_root.join("apptainer").display().to_string(),
+            ));
+            pairs.push((
+                "ARUNA_COMPUTE_APPTAINER_SIF_CACHE".to_string(),
+                state_root.join("sif").display().to_string(),
+            ));
+        }
+        pairs
+    }
+
     /// The node loads its config through dotenvy and aborts without this file,
     /// so it is written on every start next to the node's working directory.
-    pub fn write_env(&self, data_dir: &Path) -> Result<PathBuf, DesktopError> {
+    pub fn write_env(
+        &self,
+        data_dir: &Path,
+        compute: &ComputePlan,
+    ) -> Result<PathBuf, DesktopError> {
         fs::create_dir_all(data_dir)?;
         fs::create_dir_all(self.storage_dir(data_dir))?;
+        if compute.executor.is_some() {
+            fs::create_dir_all(compute_dir(data_dir))?;
+        }
         let body: String = self
-            .env_pairs(data_dir)
+            .env_pairs(data_dir, compute)
             .into_iter()
             .map(|(key, value)| env_line(&key, &value))
             .collect();
@@ -428,6 +498,11 @@ fn absolute(label: &str, raw: &str) -> Result<PathBuf, DesktopError> {
     }
 }
 
+/// Job workspaces, images and executor state, all under the node's own data.
+fn compute_dir(data_dir: &Path) -> PathBuf {
+    data_dir.join("compute")
+}
+
 fn loopback(port: u16) -> String {
     format!("127.0.0.1:{port}")
 }
@@ -444,7 +519,14 @@ mod tests {
     use super::*;
 
     fn pairs(settings: &NodeSettings) -> BTreeMap<String, String> {
-        settings.env_pairs(Path::new("/data")).into_iter().collect()
+        planned(settings, &ComputePlan::default())
+    }
+
+    fn planned(settings: &NodeSettings, plan: &ComputePlan) -> BTreeMap<String, String> {
+        settings
+            .env_pairs(Path::new("/data"), plan)
+            .into_iter()
+            .collect()
     }
 
     #[test]
@@ -577,6 +659,92 @@ mod tests {
         assert!(settings.paused);
         assert!(settings.auto_start);
         assert!(settings.storage_path.is_none());
+    }
+
+    #[test]
+    fn omits_idle_compute() {
+        // No executor resolved means the node is told nothing about compute,
+        // which leaves it off rather than half configured.
+        let map = pairs(&NodeSettings::default());
+        assert!(!map.keys().any(|key| key.starts_with("ARUNA_COMPUTE_")));
+    }
+
+    #[test]
+    fn writes_compute_limits() {
+        let settings = NodeSettings {
+            compute: ComputeSettings {
+                backend: ComputeBackend::Docker,
+                max_concurrent: 2,
+                max_cpu_cores: Some(4),
+                max_ram_bytes: Some(8_589_934_592),
+                keep_failed: true,
+                ..ComputeSettings::default()
+            },
+            ..NodeSettings::default()
+        };
+        let plan = ComputePlan {
+            executor: Some(Executor::Docker),
+            cgroup_root: None,
+        };
+        let map = planned(&settings, &plan);
+        assert_eq!(map["ARUNA_COMPUTE_EXECUTOR"], "docker");
+        assert_eq!(map["ARUNA_COMPUTE_OPTIONAL"], "1");
+        assert_eq!(map["ARUNA_COMPUTE_LOCAL_ONLY"], "1");
+        assert_eq!(map["ARUNA_COMPUTE_MAX_CONCURRENT"], "2");
+        assert_eq!(map["ARUNA_COMPUTE_MAX_CPU_CORES"], "4");
+        assert_eq!(map["ARUNA_COMPUTE_MAX_RAM_BYTES"], "8589934592");
+        assert_eq!(map["ARUNA_COMPUTE_KEEP_FAILED"], "1");
+        assert_eq!(map["ARUNA_COMPUTE_STATE_ROOT"], "/data/compute");
+        // An unset ceiling is no ceiling, so its key stays out of the file.
+        assert!(!map.contains_key("ARUNA_COMPUTE_MAX_DISK_BYTES"));
+        assert!(!map.contains_key("ARUNA_COMPUTE_APPTAINER_CGROUP_ROOT"));
+    }
+
+    #[test]
+    fn roots_apptainer_state() {
+        let settings = NodeSettings {
+            compute: ComputeSettings {
+                backend: ComputeBackend::Apptainer,
+                ..ComputeSettings::default()
+            },
+            ..NodeSettings::default()
+        };
+        let plan = ComputePlan {
+            executor: Some(Executor::Apptainer),
+            cgroup_root: Some("/sys/fs/cgroup/user.slice/user@1000.service".into()),
+        };
+        let keys: Vec<String> = settings
+            .env_pairs(Path::new("/data"), &plan)
+            .into_iter()
+            .map(|(key, _)| key)
+            .filter(|key| key.starts_with("ARUNA_COMPUTE_"))
+            .collect();
+        assert_eq!(
+            keys,
+            [
+                "ARUNA_COMPUTE_EXECUTOR",
+                "ARUNA_COMPUTE_OPTIONAL",
+                "ARUNA_COMPUTE_LOCAL_ONLY",
+                "ARUNA_COMPUTE_MAX_CONCURRENT",
+                "ARUNA_COMPUTE_APPTAINER_CGROUP_ROOT",
+                "ARUNA_COMPUTE_STATE_ROOT",
+                "ARUNA_COMPUTE_APPTAINER_STATE_ROOT",
+                "ARUNA_COMPUTE_APPTAINER_SIF_CACHE",
+            ]
+        );
+        let map = planned(&settings, &plan);
+        assert_eq!(
+            map["ARUNA_COMPUTE_APPTAINER_CGROUP_ROOT"],
+            "/sys/fs/cgroup/user.slice/user@1000.service"
+        );
+        assert_eq!(
+            map["ARUNA_COMPUTE_APPTAINER_STATE_ROOT"],
+            "/data/compute/apptainer"
+        );
+        assert_eq!(
+            map["ARUNA_COMPUTE_APPTAINER_SIF_CACHE"],
+            "/data/compute/sif"
+        );
     }
 
     #[test]

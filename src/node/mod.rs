@@ -1,4 +1,5 @@
 mod binary;
+pub mod compute;
 mod health;
 mod logs;
 
@@ -100,9 +101,10 @@ impl Supervisor {
             .clone()
     }
 
-    /// Resolves the binary, writes the node's env file and starts the run loop.
-    /// A missing binary leaves a status the status view can explain.
-    pub fn start(&self) -> Result<NodeStatus, DesktopError> {
+    /// Resolves the binary, asks the machine what it can compute in, writes the
+    /// node's env file and starts the run loop. A missing binary leaves a
+    /// status the status view can explain.
+    pub async fn start(&self) -> Result<NodeStatus, DesktopError> {
         if self
             .inner
             .lock()
@@ -128,7 +130,8 @@ impl Supervisor {
             }
         };
 
-        let env_path = settings.write_env(&self.data_dir)?;
+        let plan = compute::detect(settings.compute.backend).await;
+        let env_path = settings.write_env(&self.data_dir, &plan)?;
         self.logs.clear();
         self.logs.push(
             Stream::Desktop,
@@ -145,7 +148,7 @@ impl Supervisor {
 
         let supervisor = self.clone();
         let task = tauri::async_runtime::spawn(async move {
-            supervisor.supervise(binary, settings, receiver).await;
+            supervisor.supervise(binary, settings, plan, receiver).await;
         });
 
         let mut inner = self.inner.lock().expect("supervisor poisoned");
@@ -171,20 +174,21 @@ impl Supervisor {
 
     pub async fn restart(&self) -> Result<NodeStatus, DesktopError> {
         self.stop().await;
-        self.start()
+        self.start().await
     }
 
     async fn supervise(
         self,
         binary: PathBuf,
         settings: NodeSettings,
+        plan: compute::ComputePlan,
         mut stop: oneshot::Receiver<()>,
     ) {
         let grace = Duration::from_secs(settings.shutdown_grace_secs);
         let mut restarts = 0;
 
         loop {
-            let mut child = match self.spawn_node(&binary, &settings) {
+            let mut child = match self.spawn_node(&binary, &settings, &plan) {
                 Ok(child) => child,
                 Err(error) => {
                     self.fail(&binary, error.to_string(), restarts);
@@ -262,7 +266,12 @@ impl Supervisor {
         }
     }
 
-    fn spawn_node(&self, binary: &Path, settings: &NodeSettings) -> Result<Child, DesktopError> {
+    fn spawn_node(
+        &self,
+        binary: &Path,
+        settings: &NodeSettings,
+        plan: &compute::ComputePlan,
+    ) -> Result<Child, DesktopError> {
         let mut command = Command::new(binary);
         command
             .current_dir(&self.data_dir)
@@ -272,7 +281,7 @@ impl Supervisor {
             .kill_on_drop(true);
         // Set explicitly as well as in the env file: dotenvy never overrides an
         // inherited value, so a stale desktop environment must not leak in.
-        for (key, value) in settings.env_pairs(&self.data_dir) {
+        for (key, value) in settings.env_pairs(&self.data_dir, plan) {
             command.env(key, value);
         }
         command
