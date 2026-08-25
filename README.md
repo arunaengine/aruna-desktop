@@ -12,7 +12,7 @@ afterwards, and the events it sends when what it injected has moved.
 ```
 window  ->  the portal artifact in ui/        (one build, web and desktop)
 shell   ->  window.__ARUNA_DESKTOP__          (api base, features, bridge)
-events  ->  context-changed, node-status      (what moved since boot)
+events  ->  context-changed, navigate, …      (what moved since boot)
 bridge  ->  node supervisor, settings, compute probe, enrollment, paths, wipe
 node    ->  a supervised aruna child process on loopback
 ```
@@ -47,6 +47,7 @@ hosted portal.
 
 ```jsonc
 {
+  "revision": 0,                                  // 0 is the injected one
   "apiBaseUrl": "http://127.0.0.1:34116/api/v1",
   "authCallbackOrigin": "http://127.0.0.1:34115", // only with a local portal
   "features": { "desktop": true, "systemBrowserAuth": true },
@@ -61,23 +62,36 @@ claim version 3.
 
 | State | `apiBaseUrl` |
 | --- | --- |
-| enrolled **and** the node is running | `http://127.0.0.1:34116/api/v1` |
+| enrolled **and** the node is serving | `http://127.0.0.1:34116/api/v1` |
 | otherwise, with a realm connected | `{realm origin}/api/v1` |
 | neither | `http://127.0.0.1:34116/api/v1`, the only API this app knows |
+
+**Serving**, not spawned. A node binds its listeners only once its join and its
+startup are done, so a freshly started one would refuse the portal's first
+request. The shell polls `readyz` on the ops port for as long as the child lives
+and only then calls the node ready; losing readiness — a stop, a pause, a
+restart, a failure — takes the portal back to the realm. The same probe is one
+of [the two signals](#the-two-signals) an enrollment is watched by.
 
 An initialization script cannot be changed after its webview exists, and a
 reload would only run the old one again. So the injected object is the **first**
 context, not the only one: when the choice above moves — a realm is connected,
-an enrollment finishes, a device is wiped, the node starts or stops — the shell
-emits [`context-changed`](#events) carrying the whole context in the same shape,
-and `shell_context` answers the same object on demand. The window is never
-replaced and the page is never reloaded; the portal switches its API base in
-place and keeps the route the owner is on.
+an enrollment finishes, a device is wiped, the node starts serving or stops —
+the shell emits [`context-changed`](#events) carrying the whole context in the
+same shape, and `shell_context` answers the same object on demand. The window is
+never replaced and the page is never reloaded; the portal switches its API base
+in place and keeps the route the owner is on.
 
-The check runs after every command and every node state change that can move the
+The check runs after every command and every node transition that can move the
 choice, one turn later, so the command still answers first and the event always
 describes state that is already stored. A context equal to the one the portal
 was last told is **not** emitted, so the portal sees one event per move.
+
+`revision` numbers those moves: `0` is what the script injected, and each stored
+change adds one. Events are emitted outside the lock that stores them, so two
+moves in the same instant can arrive in either order — the portal keeps the
+highest revision it has seen and drops anything that is not newer, including a
+`shell_context` answer that lost a race with an event.
 
 `authCallbackOrigin` is set only while the node serves its own portal listener,
 because that loopback origin is the only `http` redirect URI this device can
@@ -92,7 +106,7 @@ reports as a missing bridge half rather than a failed call.
 
 | Command | Arguments | Answers |
 | --- | --- | --- |
-| `shell_context` | – | `{apiBaseUrl, authCallbackOrigin?, realmUrl?, features}` |
+| `shell_context` | – | `{revision, apiBaseUrl, authCallbackOrigin?, realmUrl?, features}` |
 | `node_status` | – | `{state, nodeId, realm, enrolled, apiBaseUrl, version, uptimeSeconds, message}` |
 | `node_logs_tail` | `{lines}` | the last lines of the node's output, oldest first |
 | `node_settings_get` | – | `{storagePath, compute, paused, autoStart}` |
@@ -142,12 +156,18 @@ Notes on the ones that do more than they say:
 * `wipe_device` re-checks `confirm` against `wipe`, stops the node, deletes the
   data directory the shell provisioned (and a storage directory outside it),
   clears the enrollment and the storage override, and keeps the machine
-  configuration. A path that is not deep enough to be one of ours is refused
-  rather than deleted. The node's own REST wipe is a separate surface, and it
-  is the one that drops the device's synced folders.
+  configuration **and the remembered realm** — a wiped device still needs a
+  portal to sign in to, and joining another realm starts there. A path that is
+  not deep enough to be one of ours is refused rather than deleted. The node's
+  own REST wipe is a separate surface, and it is the one that drops the
+  device's synced folders.
 * `validate_realm` checks the address, **remembers it** as this device's realm
   and answers with the origin. Remembering is the point: it is what the portal
-  talks to until a node of this device's own is running.
+  talks to until a node of this device's own is serving. An **enrolled** device
+  refuses it outright with `wipe this device before joining another realm`: its
+  node, its keys and its data belong to the realm it joined. A wipe keeps the
+  remembered realm, so the owner still has one to sign in to afterwards, and it
+  is a realm this device is no longer in.
 * `open_external` opens `http` and `https` in the system browser and refuses
   every other scheme.
 * `enroll_invite_last` answers with the last `enroll-invite` payload the shell
@@ -158,29 +178,47 @@ Notes on the ones that do more than they say:
 
 ## Events
 
-Three events reach the app window. None of them is a source of truth: each has a
-command answering the same thing, so a portal that missed one is never stuck.
+Four events reach the app window, and none of them is a source of truth: the
+first three have a command answering the same thing, and the fourth is a
+deep link the owner followed.
 
 | Event | Payload | Emitted |
 | --- | --- | --- |
 | `context-changed` | the shell context, as injected minus `bridge` | whenever the context moves, once per move, never unchanged |
-| `node-status` | `{state, pid, binary, detail, restarts, lastExit}` | on every supervisor state change |
+| `node-status` | `{state, ready, pid, binary, detail, restarts, lastExit}` | on every supervisor state change |
 | `enroll-invite` | [see below](#enroll-invite) | once an `aruna://enroll` link has been acted on |
+| `navigate` | `{path}` | when a deep link belongs in the portal's router |
 
 `context-changed` is emitted after `validate_realm`, after `node_settings_set`,
 after `enroll_apply` and an armed `aruna://enroll`, after `wipe_device`, while
 `node_status` settles a finishing enrollment, and on every node transition into
-or out of `Running` — a start, a stop, a pause, a restart or a failure. Each of
-those publishes its own state first, so the context the event carries is the one
-`shell_context` answers with.
+or out of **serving** — the node answering, a stop, a pause, a restart, or a
+failure. Each of those stores its own state first, so the context the event
+carries is the one `shell_context` answers with.
 
 ```jsonc
 {
+  "revision": 3,
   "apiBaseUrl": "https://aruna.example/api/v1",
   "realmUrl": "https://aruna.example",
   "features": { "desktop": true, "systemBrowserAuth": true }
 }
 ```
+
+`navigate` carries a route of the portal's own router, with the query and the
+fragment the link arrived with, and the window is brought forward with it:
+
+```jsonc
+{ "path": "/auth/callback?code=abc&state=xyz" }
+```
+
+It is an event rather than a navigation because loading that URL would reload
+the page and throw away the session and the context the portal has built. The
+cost is a **cold start**: a link that launches the app can route before the
+portal is listening. An `aruna://enroll` link is covered — its outcome waits in
+`enroll_invite_last`, and the device page reads the same enrollment out of
+`node_status` — while an `aruna://auth/callback` into a cold start is out of
+scope: a sign-in this app started has a portal listening by definition.
 
 ## The portal artifact
 
@@ -411,8 +449,8 @@ dropped with a warning that names the route only, never the query.
 
 | Link | Behaviour |
 | --- | --- |
-| `aruna://enroll?secret=…&seed=…&realm=…` | the enrollment is armed, the window opens `/app/device`, and `enroll-invite` is emitted |
-| `aruna://auth/callback?…` | the window opens `/auth/callback` with the query **and** the fragment the provider returned |
+| `aruna://enroll?secret=…&seed=…&realm=…` | the enrollment is armed, `navigate` asks for `/app/device`, and `enroll-invite` is emitted |
+| `aruna://auth/callback?…` | `navigate` asks for `/auth/callback` with the query **and** the fragment the provider returned |
 
 `secret` and `seed` are required in a link, and `seed` must be an `http`/`https`
 origin; a link missing either is dropped. The owner already accepted the
@@ -427,8 +465,9 @@ stashing it for a second confirmation.
 
 The secret is never part of it. A link followed into a cold start can deliver
 the event before the portal is listening, so the same payload waits behind
-`enroll_invite_last` for one collection, and the window also navigates to
-`/app/device`, where `node_status` reports the same enrollment either way.
+`enroll_invite_last` for one collection, and the [`navigate`](#events) event
+asks for `/app/device`, where `node_status` reports the same enrollment either
+way.
 
 ## Enrollment
 
@@ -452,7 +491,9 @@ Enrollment progress is therefore observed, never queried:
 
 1. `GET http://127.0.0.1:34117/readyz` turning `200`. The node binds its
    listeners only after the join has succeeded, and nothing is logged when it
-   does, so readiness is the authoritative "the seed accepted this device".
+   does, so readiness is the authoritative "the seed accepted this device". The
+   supervisor polls it on every start for its own reason too: it is what makes
+   the node [the API the portal talks to](#which-api-the-portal-talks-to).
 2. `GET http://127.0.0.1:34116/api/v1/info` reporting the `realm_id` from the
    invitation. The seed is asked for it when a pasted secret named no realm.
 
