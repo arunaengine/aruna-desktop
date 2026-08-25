@@ -284,6 +284,7 @@ pub async fn validate_realm(
     state: State<'_, AppState>,
     input: String,
 ) -> Result<RealmTarget, DesktopError> {
+    may_join(&state.settings())?;
     let origin = realm::normalize(&input)?;
     let target = realm::check(&state.http, &origin)
         .await
@@ -294,6 +295,18 @@ pub async fn validate_realm(
     state.store(settings)?;
     shell::sync(&app);
     Ok(target)
+}
+
+/// Whether this device may still be pointed at a realm. A device that joined
+/// one belongs to it: its node, its keys and its data are that realm's, so
+/// another realm is a wipe away rather than a setting.
+fn may_join(settings: &NodeSettings) -> Result<(), DesktopError> {
+    if settings.enrolled {
+        return Err(DesktopError::Refused(
+            "wipe this device before joining another realm".into(),
+        ));
+    }
+    Ok(())
 }
 
 /// Destroys this device: the node stops, everything the desktop provisioned for
@@ -566,6 +579,23 @@ mod tests {
         let mut paused = before.clone();
         paused.paused = true;
         assert!(!restarts(&before, &paused));
+    }
+
+    #[test]
+    fn refuses_a_second_realm() {
+        // A wipe keeps the remembered realm, so the device still has one to
+        // sign in to; joining another is what it refuses.
+        let mut settings = NodeSettings::default();
+        assert!(may_join(&settings).is_ok());
+
+        settings.remember_realm("https://aruna.example", "https://aruna.example/api/v1");
+        settings.joined(Some("r-1".into()));
+        let refusal = may_join(&settings).expect_err("an enrolled device");
+        assert!(refusal.to_string().contains("wipe this device"));
+
+        settings.wipe();
+        assert!(may_join(&settings).is_ok());
+        assert_eq!(settings.realm_url.as_deref(), Some("https://aruna.example"));
     }
 
     #[test]

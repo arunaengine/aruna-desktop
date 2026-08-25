@@ -25,6 +25,9 @@ pub enum DesktopError {
     Link(String),
     #[error("{0}")]
     Unreachable(String),
+    /// A request this device's own state does not allow. Shown as written.
+    #[error("{0}")]
+    Refused(String),
 }
 
 impl Serialize for DesktopError {
