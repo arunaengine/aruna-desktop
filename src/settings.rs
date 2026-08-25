@@ -52,22 +52,84 @@ impl Default for NodePorts {
     }
 }
 
-/// The local control surface the portal renders: where the node stores data
-/// and whether it runs. Everything else the desktop keeps is machine
-/// configuration the owner never has to see.
+/// Which executor the node runs the owner's local jobs in. `Auto` takes
+/// whatever this machine turns out to have; `Off` runs nothing locally.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum ComputeBackend {
+    #[default]
+    Auto,
+    Docker,
+    Apptainer,
+    Off,
+}
+
+/// What the owner lets local jobs use. Every ceiling is optional and unset
+/// means unlimited: the machine is the owner's, so the shell states no policy
+/// of its own beyond running one job at a time.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ComputeSettings {
+    pub backend: ComputeBackend,
+    pub max_concurrent: u32,
+    pub max_cpu_cores: Option<u32>,
+    pub max_ram_bytes: Option<u64>,
+    pub max_disk_bytes: Option<u64>,
+    /// Keeps a failed job's container and workspace for inspection.
+    pub keep_failed: bool,
+}
+
+impl Default for ComputeSettings {
+    fn default() -> Self {
+        Self {
+            backend: ComputeBackend::Auto,
+            max_concurrent: 1,
+            max_cpu_cores: None,
+            max_ram_bytes: None,
+            max_disk_bytes: None,
+            keep_failed: false,
+        }
+    }
+}
+
+impl ComputeSettings {
+    fn validate(&self) -> Result<(), DesktopError> {
+        if self.max_concurrent == 0 {
+            return Err(DesktopError::Settings(
+                "local compute needs at least one concurrent run".into(),
+            ));
+        }
+        let zero = self.max_cpu_cores == Some(0)
+            || self.max_ram_bytes == Some(0)
+            || self.max_disk_bytes == Some(0);
+        match zero {
+            true => Err(DesktopError::Settings(
+                "a compute limit may not be zero; leave it unset for no limit".into(),
+            )),
+            false => Ok(()),
+        }
+    }
+}
+
+/// The local control surface the portal renders: where the node stores data,
+/// what it may compute and whether it runs. Everything else the desktop keeps
+/// is machine configuration the owner never has to see.
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct LocalSettings {
     pub storage_path: String,
+    pub compute: ComputeSettings,
     pub paused: bool,
     pub auto_start: bool,
 }
 
 /// A partial edit of [`LocalSettings`]; the portal may send any subset.
+/// `compute` is replaced whole, because an absent ceiling means unlimited.
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct SettingsPatch {
     pub storage_path: Option<String>,
+    pub compute: Option<ComputeSettings>,
     pub paused: Option<bool>,
     pub auto_start: Option<bool>,
 }
@@ -81,6 +143,8 @@ pub struct NodeSettings {
     pub binary_path: Option<PathBuf>,
     /// Defaults to `<app data>/node/storage`.
     pub storage_path: Option<PathBuf>,
+    /// What the owner's local jobs may run in and use.
+    pub compute: ComputeSettings,
     /// Keeps the node stopped until the owner resumes it, across launches.
     pub paused: bool,
     /// The device name the owner typed when enrolling. Display only: the realm
@@ -119,6 +183,7 @@ impl Default for NodeSettings {
         Self {
             binary_path: None,
             storage_path: None,
+            compute: ComputeSettings::default(),
             paused: false,
             device_label: None,
             portal_dir: None,
@@ -176,7 +241,7 @@ impl NodeSettings {
                 "the node rejects a shutdown grace below {MIN_GRACE_SECS} seconds"
             )));
         }
-        Ok(())
+        self.compute.validate()
     }
 
     /// What the portal's local panel shows. The storage path is the effective
@@ -184,6 +249,7 @@ impl NodeSettings {
     pub fn local(&self, data_dir: &Path) -> LocalSettings {
         LocalSettings {
             storage_path: self.storage_dir(data_dir).display().to_string(),
+            compute: self.compute,
             paused: self.paused,
             auto_start: self.auto_start,
         }
@@ -198,6 +264,9 @@ impl NodeSettings {
                 true => None,
                 false => Some(absolute("the storage location", &raw)?),
             };
+        }
+        if let Some(compute) = patch.compute {
+            self.compute = compute;
         }
         if let Some(paused) = patch.paused {
             self.paused = paused;
@@ -508,6 +577,47 @@ mod tests {
         assert!(settings.paused);
         assert!(settings.auto_start);
         assert!(settings.storage_path.is_none());
+    }
+
+    #[test]
+    fn replaces_compute_settings() {
+        // The portal sends the whole object: an omitted ceiling is "no limit",
+        // which a per-field merge could not tell from "unchanged".
+        let mut settings = NodeSettings::default();
+        settings
+            .apply(SettingsPatch {
+                compute: Some(
+                    serde_json::from_value(serde_json::json!({
+                        "backend": "docker",
+                        "maxConcurrent": 2,
+                        "maxRamBytes": 8_589_934_592u64,
+                    }))
+                    .expect("the portal's shape"),
+                ),
+                ..SettingsPatch::default()
+            })
+            .expect("a usable patch");
+        assert_eq!(settings.compute.backend, ComputeBackend::Docker);
+        assert_eq!(settings.compute.max_concurrent, 2);
+        assert_eq!(settings.compute.max_ram_bytes, Some(8_589_934_592));
+        assert!(settings.compute.max_cpu_cores.is_none());
+        assert!(!settings.compute.keep_failed);
+    }
+
+    #[test]
+    fn rejects_empty_limits() {
+        let mut settings = NodeSettings::default();
+        settings.compute.max_concurrent = 0;
+        assert!(settings.validate().is_err());
+
+        settings.compute = ComputeSettings {
+            max_cpu_cores: Some(0),
+            ..ComputeSettings::default()
+        };
+        assert!(settings.validate().is_err());
+
+        settings.compute.max_cpu_cores = Some(4);
+        settings.validate().expect("a usable ceiling");
     }
 
     #[test]
