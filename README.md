@@ -11,7 +11,7 @@ script runs, and the commands it answers afterwards.
 ```
 window  ->  the portal artifact in ui/        (one build, web and desktop)
 shell   ->  window.__ARUNA_DESKTOP__          (api base, features, bridge)
-bridge  ->  node supervisor, settings, enrollment, folder picker, wipe
+bridge  ->  node supervisor, settings, compute probe, enrollment, paths, wipe
 node    ->  a supervised aruna child process on loopback
 ```
 
@@ -48,12 +48,12 @@ hosted portal.
   "apiBaseUrl": "http://127.0.0.1:34116/api/v1",
   "authCallbackOrigin": "http://127.0.0.1:34115", // only with a local portal
   "features": { "desktop": true, "systemBrowserAuth": true },
-  "bridge": { "invoke": "…", "version": 1 }
+  "bridge": { "invoke": "…", "version": 2 }
 }
 ```
 
 `version` is the command set below. A shell that answers fewer commands must not
-claim version 1.
+claim version 2.
 
 ### Which API the portal talks to
 
@@ -80,7 +80,7 @@ accepts.
 
 ## Commands
 
-Contract version 1. Arguments are a single object; answers are JSON. A name the
+Contract version 2. Arguments are a single object; answers are JSON. A name the
 shell does not implement is rejected with `unknown command: …`, which the portal
 reports as a missing bridge half rather than a failed call.
 
@@ -88,11 +88,13 @@ reports as a missing bridge half rather than a failed call.
 | --- | --- | --- |
 | `node_status` | – | `{state, nodeId, realm, enrolled, apiBaseUrl, version, uptimeSeconds, message}` |
 | `node_logs_tail` | `{lines}` | the last lines of the node's output, oldest first |
-| `node_settings_get` | – | `{storagePath, paused, autoStart}` |
+| `node_settings_get` | – | `{storagePath, compute, paused, autoStart}` |
 | `node_settings_set` | `{settings}` (any subset) | the stored settings |
+| `compute_probe` | – | `{docker: {available, version, socket}, apptainer: {available, version, cgroupOk, cgroupRoot}}` |
 | `enroll_apply` | `{secret, seedUrl?, realm?, label?}` | `{nodeId, realm}` |
 | `wipe_device` | `{confirm}` | – |
 | `pick_directory` | `{title?, startPath?}` | the chosen path, or `null` |
+| `reveal_path` | `{path}` | – |
 | `open_external` | `{url}` | – |
 | `validate_realm` | `{input}` | `{origin, realm, apiVersion, portal}` |
 | `enroll_invite_last` | – | the uncollected `enroll-invite` payload, or `null` |
@@ -105,9 +107,22 @@ Notes on the ones that do more than they say:
   holding a realm token, which the shell never has, so the portal reads it with
   the owner's own.
 * `node_settings_set` stops the node when `paused` turns on and starts it when
-  it turns off. Every other field reaches the node on its next start. Synced
-  folders are **not** shell settings: they live in the node, are bound through
-  its `/device/folders` API and are wiped by `/device/wipe`.
+  it turns off. `storagePath` and `compute` are read once at startup, so
+  changing either **restarts** a node that is up; everything else reaches the
+  node on its next start. Synced folders are **not** shell settings: they live
+  in the node, are bound through its `/device/folders` API and are wiped by
+  `/device/wipe`.
+* `compute_probe` asks the machine, not the settings: it runs
+  `docker version --format '{{.Server.Version}}'` and `apptainer version` with
+  a short timeout, so `available` means the daemon answered rather than that a
+  client is installed. A backend that is not installed is unavailable, never an
+  error. `cgroupOk` reports whether this login session owns a delegated cgroup
+  slice with the `memory` and `pids` controllers, which is what apptainer needs
+  to hold a job to its limits.
+* `reveal_path` shows a path in the owner's file manager. The path is resolved
+  first and must lie inside the owner's home or the node's data directory;
+  anything else is refused the way the wipe guard refuses a path that was never
+  ours, and a path that does not exist is refused too.
 * `enroll_apply` needs only the secret. The seed URL and the realm travel inside
   it; the shell keeps its own copy of both only to watch the join. It clears a
   pause, because enrolling is an explicit "run this node".
@@ -202,6 +217,7 @@ Checks:
 cargo check --all-targets
 cargo test
 cargo +nightly fmt --all -- --check
+cargo +nightly clippy --all-targets -- -D warnings
 ```
 
 Bundling goes through the Tauri CLI, which this repository does not vendor:
@@ -253,6 +269,7 @@ and a stale shell environment cannot leak in.
 | `S3_ADDRESS`, `S3_HOST` | the loopback endpoint while the local S3 listener is on, **empty** while it is off |
 | `S3_PUBLIC_URL` | only while the local S3 endpoint is enabled |
 | `ONBOARDING_SECRET` | the one-time enrollment secret, consumed on the next start |
+| `ARUNA_COMPUTE_*` | the local compute profile below, written only while an executor was resolved |
 
 The ports are fixed on loopback so the portal origin and the OIDC redirect URI
 can be registered up front.
@@ -275,6 +292,71 @@ Two rows of the env table are the device profile itself:
   pair aborts the node, so they always move together.
 * `PORTAL_MODE` is written as `disabled` when no portal directory is set. It is
   never written empty: aruna accepts only `artifact` and `disabled`.
+
+### Local compute
+
+The owner may run their own jobs on this machine (**never** the realm's: the
+node is told so explicitly). Before every node start the shell probes the
+machine, resolves the owner's `backend` choice against what answered, and writes
+the profile below. Nothing of it is written when no executor was resolved —
+`off`, or `auto` on a machine with neither backend — which leaves compute off.
+
+| Key | Value written by the app |
+| --- | --- |
+| `ARUNA_COMPUTE_EXECUTOR` | `docker` or `apptainer`, the resolved backend |
+| `ARUNA_COMPUTE_OPTIONAL` | `1`; a missing daemon leaves the node up without compute |
+| `ARUNA_COMPUTE_LOCAL_ONLY` | `1`; the device profile has no S3 listener to hand a container |
+| `ARUNA_COMPUTE_MAX_CONCURRENT` | the owner's concurrent-run ceiling, `1` by default |
+| `ARUNA_COMPUTE_MAX_CPU_CORES`, `ARUNA_COMPUTE_MAX_RAM_BYTES`, `ARUNA_COMPUTE_MAX_DISK_BYTES` | each written only while the owner set it; unset means no ceiling |
+| `ARUNA_COMPUTE_KEEP_FAILED` | `1` while the owner keeps failed jobs for inspection |
+| `ARUNA_COMPUTE_APPTAINER_CGROUP_ROOT` | the delegated user slice, when apptainer runs and one was detected |
+| `ARUNA_COMPUTE_STATE_ROOT` | `<app data>/node/compute` |
+| `ARUNA_COMPUTE_APPTAINER_STATE_ROOT`, `ARUNA_COMPUTE_APPTAINER_SIF_CACHE` | `…/compute/apptainer` and `…/compute/sif` (apptainer only) |
+
+These key names **must** match the node's own configuration reference
+(`docs/compute-executors.md` in the aruna repository). `ARUNA_COMPUTE_LOCAL_ONLY`,
+`ARUNA_COMPUTE_KEEP_FAILED` and `ARUNA_COMPUTE_STATE_ROOT` are the device
+profile's own additions and are being finalised on the node side; the rest the
+node reads today.
+
+`auto` prefers docker, because it needs no delegated cgroup of ours, and falls
+back to apptainer. An explicit `docker` or `apptainer` is written whatever the
+probe found, so the node reports the real reason it could not build one instead
+of the shell silently choosing another.
+
+## Settings the owner sees
+
+`node_settings_get` and `node_settings_set` speak this shape, and it is the
+whole local control surface:
+
+```jsonc
+{
+  "storagePath": "/home/owner/.local/share/engine.aruna.desktop/node/storage",
+  "compute": {
+    "backend": "auto",          // auto | docker | apptainer | off
+    "maxConcurrent": 1,
+    "maxCpuCores": null,        // null is no ceiling, not a default
+    "maxRamBytes": null,
+    "maxDiskBytes": null,
+    "keepFailed": false
+  },
+  "paused": false,
+  "autoStart": false
+}
+```
+
+A patch may carry any subset of the top level, but `compute` is replaced whole:
+an absent ceiling means "no ceiling", which a per-field merge could not tell
+from "unchanged". Zero is refused for every compute number — an unset ceiling is
+how the owner says "no limit".
+
+The starting values are deliberately modest rather than a policy: one job at a
+time, no ceilings, the machine's own backend. It is the owner's machine.
+
+**Paused means nothing runs.** A paused node is stopped, so it serves nothing,
+syncs nothing and computes nothing; local jobs are refused with it. Resuming
+starts it again. The shell passes no pause state to the node, because there is
+no node to pass it to.
 
 ## Deep links
 
