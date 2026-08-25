@@ -129,7 +129,8 @@ pub fn node_settings_get(state: State<'_, AppState>) -> LocalSettings {
 }
 
 /// Applies a settings patch and answers with what was stored. Pausing stops the
-/// node and resuming starts it; the rest reaches the node on its next start.
+/// node and resuming starts it; where it stores data and what it may compute
+/// are read at startup, so changing either restarts a node that is up.
 #[tauri::command]
 pub async fn node_settings_set(
     app: AppHandle,
@@ -137,14 +138,25 @@ pub async fn node_settings_set(
     settings: SettingsPatch,
 ) -> Result<LocalSettings, DesktopError> {
     let switched = settings.paused;
-    let mut stored = state.settings();
+    let before = state.settings();
+    let mut stored = before.clone();
     stored.apply(settings)?;
     stored.validate()?;
+    let moved = restarts(&before, &stored);
     state.store(stored)?;
 
+    let live = matches!(
+        DeviceState::from(state.supervisor.status().state),
+        DeviceState::Running | DeviceState::Starting
+    );
     match switched {
         Some(true) => {
             state.supervisor.stop().await;
+        }
+        _ if moved && live => {
+            if let Err(error) = state.supervisor.restart().await {
+                tracing::warn!(%error, "Could not restart the node");
+            }
         }
         // A device with no node binary stays a usable app, so a failed resume
         // is left in the status rather than refusing the setting.
@@ -319,6 +331,12 @@ fn web_url(raw: &str) -> Result<String, DesktopError> {
     }
 }
 
+/// Whether the node has to be restarted for a patch to reach it. Both settings
+/// are read once at startup, so a later start would be too late.
+fn restarts(before: &NodeSettings, after: &NodeSettings) -> bool {
+    before.storage_path != after.storage_path || before.compute != after.compute
+}
+
 /// The node's REST base, the same one the portal is told to talk to.
 pub fn api_base(settings: &NodeSettings) -> String {
     format!("{}/api/v1", settings.api_url())
@@ -467,6 +485,28 @@ mod tests {
         assert!(!removable(Path::new("/"), Some(home)));
         assert!(!removable(Path::new("/data"), Some(home)));
         assert!(!removable(Path::new("relative/path"), Some(home)));
+    }
+
+    #[test]
+    fn restarts_on_startup_keys() {
+        let before = NodeSettings {
+            storage_path: Some(PathBuf::from("/data/one")),
+            ..NodeSettings::default()
+        };
+        let mut after = before.clone();
+        assert!(!restarts(&before, &after));
+
+        after.storage_path = Some(PathBuf::from("/data/two"));
+        assert!(restarts(&before, &after));
+
+        let mut computed = before.clone();
+        computed.compute.max_concurrent = 4;
+        assert!(restarts(&before, &computed));
+
+        // A pause is not a restart: it stops the node outright.
+        let mut paused = before.clone();
+        paused.paused = true;
+        assert!(!restarts(&before, &paused));
     }
 
     #[test]
