@@ -538,7 +538,7 @@ mod tests {
     }
 
     #[test]
-    fn restarts_on_startup_keys() {
+    fn restarts_startup_keys() {
         let before = NodeSettings {
             storage_path: Some(PathBuf::from("/data/one")),
             ..NodeSettings::default()

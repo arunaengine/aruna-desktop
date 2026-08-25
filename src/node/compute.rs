@@ -298,7 +298,7 @@ mod tests {
     }
 
     #[test]
-    fn honours_an_explicit_choice() {
+    fn honours_explicit_choice() {
         // The node reports why a chosen backend did not build; guessing another
         // one behind the owner's back would hide that.
         assert_eq!(
@@ -328,7 +328,7 @@ mod tests {
     }
 
     #[test]
-    fn finds_the_user_slice() {
+    fn finds_user_slice() {
         assert_eq!(
             slice("0::/user.slice/user-1000.slice/user@1000.service/app.slice/app.scope\n")
                 .as_deref(),
