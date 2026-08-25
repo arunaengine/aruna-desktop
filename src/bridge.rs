@@ -567,7 +567,7 @@ mod tests {
         assert!(restarts(&before, &after));
 
         let mut computed = before.clone();
-        computed.compute.max_concurrent = 4;
+        computed.compute.max_concurrent = Some(4);
         assert!(restarts(&before, &computed));
 
         // A pause is not a restart: it stops the node outright.

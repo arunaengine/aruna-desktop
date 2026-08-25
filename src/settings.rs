@@ -72,7 +72,7 @@ pub enum ComputeBackend {
 #[serde(rename_all = "camelCase", default)]
 pub struct ComputeSettings {
     pub backend: ComputeBackend,
-    pub max_concurrent: u32,
+    pub max_concurrent: Option<u32>,
     pub max_cpu_cores: Option<u32>,
     pub max_ram_bytes: Option<u64>,
     pub max_disk_bytes: Option<u64>,
@@ -84,7 +84,7 @@ impl Default for ComputeSettings {
     fn default() -> Self {
         Self {
             backend: ComputeBackend::Auto,
-            max_concurrent: 1,
+            max_concurrent: Some(1),
             max_cpu_cores: None,
             max_ram_bytes: None,
             max_disk_bytes: None,
@@ -95,12 +95,8 @@ impl Default for ComputeSettings {
 
 impl ComputeSettings {
     fn validate(&self) -> Result<(), DesktopError> {
-        if self.max_concurrent == 0 {
-            return Err(DesktopError::Settings(
-                "local compute needs at least one concurrent run".into(),
-            ));
-        }
-        let zero = self.max_cpu_cores == Some(0)
+        let zero = self.max_concurrent == Some(0)
+            || self.max_cpu_cores == Some(0)
             || self.max_ram_bytes == Some(0)
             || self.max_disk_bytes == Some(0);
         match zero {
@@ -422,12 +418,12 @@ impl NodeSettings {
             // what the owner submits here: never realm work, never a listener.
             ("ARUNA_COMPUTE_OPTIONAL".to_string(), "1".to_string()),
             ("ARUNA_COMPUTE_LOCAL_ONLY".to_string(), "1".to_string()),
-            (
-                "ARUNA_COMPUTE_MAX_CONCURRENT".to_string(),
-                self.compute.max_concurrent.to_string(),
-            ),
         ];
         for (key, value) in [
+            (
+                "ARUNA_COMPUTE_MAX_CONCURRENT",
+                self.compute.max_concurrent.map(u64::from),
+            ),
             (
                 "ARUNA_COMPUTE_MAX_CPU_CORES",
                 self.compute.max_cpu_cores.map(u64::from),
@@ -682,7 +678,7 @@ mod tests {
         let settings = NodeSettings {
             compute: ComputeSettings {
                 backend: ComputeBackend::Docker,
-                max_concurrent: 2,
+                max_concurrent: Some(2),
                 max_cpu_cores: Some(4),
                 max_ram_bytes: Some(8_589_934_592),
                 keep_failed: true,
@@ -706,6 +702,15 @@ mod tests {
         // An unset ceiling is no ceiling, so its key stays out of the file.
         assert!(!map.contains_key("ARUNA_COMPUTE_MAX_DISK_BYTES"));
         assert!(!map.contains_key("ARUNA_COMPUTE_APPTAINER_CGROUP_ROOT"));
+
+        let unbounded = NodeSettings {
+            compute: ComputeSettings {
+                max_concurrent: None,
+                ..settings.compute
+            },
+            ..settings
+        };
+        assert!(!planned(&unbounded, &plan).contains_key("ARUNA_COMPUTE_MAX_CONCURRENT"));
     }
 
     #[test]
@@ -775,7 +780,7 @@ mod tests {
             })
             .expect("a usable patch");
         assert_eq!(settings.compute.backend, ComputeBackend::Docker);
-        assert_eq!(settings.compute.max_concurrent, 2);
+        assert_eq!(settings.compute.max_concurrent, Some(2));
         assert_eq!(settings.compute.max_ram_bytes, Some(8_589_934_592));
         assert!(settings.compute.max_cpu_cores.is_none());
         assert!(!settings.compute.keep_failed);
@@ -784,7 +789,7 @@ mod tests {
     #[test]
     fn rejects_empty_limits() {
         let mut settings = NodeSettings::default();
-        settings.compute.max_concurrent = 0;
+        settings.compute.max_concurrent = Some(0);
         assert!(settings.validate().is_err());
 
         settings.compute = ComputeSettings {

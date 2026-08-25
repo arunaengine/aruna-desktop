@@ -310,7 +310,7 @@ the environment the app was launched from cannot configure the node's compute.
 | `ARUNA_COMPUTE_EXECUTOR` | `docker` or `apptainer`, the resolved backend, or `off` |
 | `ARUNA_COMPUTE_OPTIONAL` | `1`; a missing daemon leaves the node up without compute |
 | `ARUNA_COMPUTE_LOCAL_ONLY` | `1`; the device profile has no S3 listener to hand a container |
-| `ARUNA_COMPUTE_MAX_CONCURRENT` | the owner's concurrent-run ceiling, `1` by default |
+| `ARUNA_COMPUTE_MAX_CONCURRENT` | the owner's concurrent-run ceiling, `1` by default; omitted when they unset it |
 | `ARUNA_COMPUTE_MAX_CPU_CORES`, `ARUNA_COMPUTE_MAX_RAM_BYTES`, `ARUNA_COMPUTE_MAX_DISK_BYTES` | each written only while the owner set it; unset means no ceiling |
 | `ARUNA_COMPUTE_KEEP_FAILED` | `1` while the owner keeps failed jobs for inspection |
 | `ARUNA_COMPUTE_APPTAINER_CGROUP_ROOT` | the delegated user slice; apptainer is only ever chosen with one |
@@ -340,7 +340,7 @@ whole local control surface:
   "storagePath": "/home/owner/.local/share/engine.aruna.desktop/node/storage",
   "compute": {
     "backend": "auto",          // auto | docker | apptainer | off
-    "maxConcurrent": 1,
+    "maxConcurrent": 1,         // null here too: as many as the node will run
     "maxCpuCores": null,        // null is no ceiling, not a default
     "maxRamBytes": null,
     "maxDiskBytes": null,
@@ -353,8 +353,8 @@ whole local control surface:
 
 A patch may carry any subset of the top level, but `compute` is replaced whole:
 an absent ceiling means "no ceiling", which a per-field merge could not tell
-from "unchanged". Zero is refused for every compute number — an unset ceiling is
-how the owner says "no limit".
+from "unchanged". Zero is refused for every compute number — `null` is how the
+owner says "no limit".
 
 The starting values are deliberately modest rather than a policy: one job at a
 time, no ceilings, the machine's own backend. It is the owner's machine.
