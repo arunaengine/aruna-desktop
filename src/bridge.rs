@@ -4,7 +4,7 @@
 //! does not get an answer for is reported as a missing shell half.
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use serde::Serialize;
 use tauri::{AppHandle, Manager, State};
@@ -15,6 +15,7 @@ use tokio::sync::oneshot;
 use crate::deep_link::{EnrollInvite, EnrollLink};
 use crate::enroll::{EnrollPhase, Observed};
 use crate::error::DesktopError;
+use crate::node::compute::ComputeProbe;
 use crate::node::{self, NodeInfo, NodeState, NodeStatus};
 use crate::realm::{self, RealmTarget};
 use crate::settings::{LocalSettings, NodeSettings, SettingsPatch};
@@ -23,14 +24,16 @@ use crate::state::AppState;
 
 /// Every command this shell answers. A name that is not here is rejected as
 /// unknown, which the portal reads as a bridge missing that half.
-pub const KNOWN: [&str; 10] = [
+pub const KNOWN: [&str; 12] = [
     "node_status",
     "node_logs_tail",
     "node_settings_get",
     "node_settings_set",
+    "compute_probe",
     "enroll_apply",
     "wipe_device",
     "pick_directory",
+    "reveal_path",
     "open_external",
     "validate_realm",
     "enroll_invite_last",
@@ -169,6 +172,42 @@ pub async fn node_settings_set(
     }
     shell::sync(&app);
     Ok(state.settings().local(&state.data_dir))
+}
+
+/// What this machine can run a local job in, asked fresh: a daemon comes and
+/// goes while the app stays open. The answer is the machine's, not the owner's
+/// choice, which stays in the settings.
+#[tauri::command]
+pub async fn compute_probe() -> ComputeProbe {
+    node::compute::probe().await
+}
+
+/// Shows a path in the owner's file manager. Only their own home and the
+/// node's data are revealed; anything else is refused, like the wipe guard
+/// refuses a path that was never ours.
+#[tauri::command]
+pub fn reveal_path(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    path: String,
+) -> Result<(), DesktopError> {
+    let raw = path.trim();
+    let target = fs::canonicalize(raw)
+        .map_err(|_| DesktopError::Settings(format!("there is no {raw} to show")))?;
+    let roots: Vec<PathBuf> = [home(), Some(state.data_dir.clone())]
+        .into_iter()
+        .flatten()
+        .map(resolved)
+        .collect();
+    if !revealable(&target, &roots) {
+        return Err(DesktopError::Settings(format!(
+            "refusing to show {}",
+            target.display()
+        )));
+    }
+    app.opener()
+        .reveal_item_in_dir(&target)
+        .map_err(|error| DesktopError::Unreachable(error.to_string()))
 }
 
 /// Arms the next node start with a one-time enrollment secret and restarts the
@@ -436,8 +475,20 @@ fn removable(path: &Path, home: Option<&Path>) -> bool {
     path.is_absolute() && path.components().count() > 2 && home.is_none_or(|home| path != home)
 }
 
+/// The owner's data is theirs to look at; the rest of the machine is not. Both
+/// sides are compared resolved, so no link leads out of a root.
+fn revealable(path: &Path, roots: &[PathBuf]) -> bool {
+    path.is_absolute()
+        && !path.components().any(|part| part == Component::ParentDir)
+        && roots.iter().any(|root| path.starts_with(root))
+}
+
 fn home() -> Option<PathBuf> {
     std::env::var_os("HOME").map(PathBuf::from)
+}
+
+fn resolved(path: PathBuf) -> PathBuf {
+    fs::canonicalize(&path).unwrap_or(path)
 }
 
 #[cfg(test)]
@@ -485,6 +536,22 @@ mod tests {
         assert!(!removable(Path::new("/"), Some(home)));
         assert!(!removable(Path::new("/data"), Some(home)));
         assert!(!removable(Path::new("relative/path"), Some(home)));
+    }
+
+    #[test]
+    fn guards_reveal_paths() {
+        let roots = [
+            PathBuf::from("/home/owner"),
+            PathBuf::from("/var/lib/aruna/node"),
+        ];
+        assert!(revealable(Path::new("/home/owner/data/set.csv"), &roots));
+        assert!(revealable(Path::new("/var/lib/aruna/node/storage"), &roots));
+        assert!(!revealable(Path::new("/etc/shadow"), &roots));
+        assert!(!revealable(Path::new("/home/other/data"), &roots));
+        assert!(!revealable(Path::new("relative/path"), &roots));
+        // A traversal that lands back inside a root is still not a path the
+        // owner named.
+        assert!(!revealable(Path::new("/home/owner/../owner/data"), &roots));
     }
 
     #[test]

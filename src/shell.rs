@@ -16,7 +16,7 @@ use crate::windows;
 
 /// The command set this shell implements. The portal pins it, so a shell that
 /// answers fewer commands must not claim this version.
-pub const BRIDGE_VERSION: u32 = 1;
+pub const BRIDGE_VERSION: u32 = 2;
 
 /// Runtime switches the portal reads. Both are what this shell always is: the
 /// desktop views exist, and sign-in leaves through the system browser.
@@ -241,7 +241,7 @@ mod tests {
         assert!(script.contains("\"apiBaseUrl\":\"http://127.0.0.1:34116/api/v1\""));
         assert!(script.contains("\"realmUrl\":\"https://aruna.example\""));
         assert!(script.contains("\"systemBrowserAuth\":true"));
-        assert!(script.contains("version: 1"));
+        assert!(script.contains("version: 2"));
         assert!(script.contains("Object.defineProperty(window, '__ARUNA_DESKTOP__'"));
         assert!(script.contains("Object.freeze(context)"));
     }
