@@ -587,7 +587,7 @@ mod tests {
     }
 
     #[test]
-    fn refuses_a_second_realm() {
+    fn refuses_second_realm() {
         // A wipe keeps the remembered realm, so the device still has one to
         // sign in to; joining another is what it refuses.
         let mut settings = NodeSettings::default();
