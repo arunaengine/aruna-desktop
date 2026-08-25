@@ -35,6 +35,13 @@ pub async fn probe(client: &reqwest::Client, ops_port: u16) -> HealthReport {
     }
 }
 
+/// Whether the node's readiness endpoint answers. A node binds its listeners
+/// only once the join and the startup are done, so this is what "serving"
+/// means: before it, the REST API refuses the connection.
+pub async fn ready(client: &reqwest::Client, ops_port: u16) -> bool {
+    probe_path(client, ops_port, "readyz").await.ok
+}
+
 /// What a node reports about itself to a caller holding no token: its realm and
 /// the API version it serves. Its node id needs a realm token, so the desktop
 /// never sees one and the portal reads it with the owner's own.

@@ -4,7 +4,7 @@ mod health;
 mod logs;
 
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
+use std::process::{ExitStatus, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -17,7 +17,7 @@ use tokio::sync::oneshot;
 use crate::error::DesktopError;
 use crate::settings::NodeSettings;
 
-pub use health::{NodeInfo, info, probe, realm_id};
+pub use health::{NodeInfo, info, probe, ready, realm_id};
 pub use logs::{LogBuffer, Stream};
 
 /// Emitted to the frontend whenever the supervised node changes state.
@@ -26,6 +26,10 @@ pub const STATUS_EVENT: &str = "node-status";
 /// A node that keeps dying is a configuration problem, not a transient one.
 const MAX_RESTARTS: u32 = 5;
 const RESTART_BACKOFF: Duration = Duration::from_secs(2);
+
+/// How often a started node is asked whether it serves yet. A join may take a
+/// while, so this waits for as long as the child lives.
+const READY_POLL: Duration = Duration::from_millis(500);
 
 #[derive(Clone, Copy, Debug, Default, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -44,6 +48,9 @@ pub enum NodeState {
 #[serde(rename_all = "camelCase")]
 pub struct NodeStatus {
     pub state: NodeState,
+    /// Whether the node answers on its ops listener. A spawned node is not one
+    /// yet: it binds nothing until its join and startup are done.
+    pub ready: bool,
     pub pid: Option<u32>,
     pub binary: Option<String>,
     pub detail: Option<String>,
@@ -71,6 +78,8 @@ pub struct Supervisor {
     data_dir: PathBuf,
     resources: Option<PathBuf>,
     settings: Arc<Mutex<NodeSettings>>,
+    /// Only ever used against the node's own loopback listeners.
+    http: reqwest::Client,
     logs: LogBuffer,
     inner: Arc<Mutex<Inner>>,
 }
@@ -87,6 +96,7 @@ impl Supervisor {
             data_dir,
             resources,
             settings,
+            http: reqwest::Client::new(),
             logs: LogBuffer::default(),
             inner: Arc::new(Mutex::new(Inner::default())),
         }
@@ -244,10 +254,7 @@ impl Supervisor {
                 ..NodeStatus::default()
             });
 
-            let exit = tokio::select! {
-                exit = child.wait() => Some(exit),
-                _ = &mut stop => None,
-            };
+            let exit = self.watch(&mut child, &mut stop, settings.ports.ops).await;
 
             let Some(exit) = exit else {
                 self.publish(NodeStatus {
@@ -302,6 +309,49 @@ impl Supervisor {
                 });
                 return;
             }
+        }
+    }
+
+    /// Waits for the child to exit or a stop to arrive, asking the node whether
+    /// it serves yet in the meantime. `None` means the stop won.
+    async fn watch(
+        &self,
+        child: &mut Child,
+        stop: &mut oneshot::Receiver<()>,
+        ops: u16,
+    ) -> Option<std::io::Result<ExitStatus>> {
+        let serving = self.await_ready(ops);
+        tokio::pin!(serving);
+        let mut waiting = true;
+        loop {
+            tokio::select! {
+                exit = child.wait() => return Some(exit),
+                _ = &mut *stop => return None,
+                () = &mut serving, if waiting => {
+                    waiting = false;
+                    self.mark_ready();
+                }
+            }
+        }
+    }
+
+    /// Answers once the node's readiness endpoint does. A join can take a while
+    /// and has no deadline of ours: the child exiting ends the wait.
+    async fn await_ready(&self, ops: u16) {
+        while !ready(&self.http, ops).await {
+            tokio::time::sleep(READY_POLL).await;
+        }
+    }
+
+    /// Republishes the current run as serving, which is what the shell context
+    /// and the portal's device view switch on.
+    fn mark_ready(&self) {
+        let status = self.status();
+        if status.state == NodeState::Running && !status.ready {
+            self.publish(NodeStatus {
+                ready: true,
+                ..status
+            });
         }
     }
 
@@ -393,7 +443,7 @@ impl Supervisor {
             NodeState::Running => inner.started.or_else(|| Some(std::time::Instant::now())),
             _ => None,
         };
-        let flipped = flips(inner.status.state, status.state);
+        let flipped = flips(&inner.status, &status);
         inner.status = status.clone();
         drop(inner);
         if let Err(error) = self.app.emit(STATUS_EVENT, status) {
@@ -407,11 +457,12 @@ impl Supervisor {
     }
 }
 
-/// Whether a transition crosses `Running`, which is the half of the shell
-/// context the node owns: an enrolled node that is up is what the portal talks
-/// to, and anything else sends it back to the realm.
-fn flips(before: NodeState, after: NodeState) -> bool {
-    (before == NodeState::Running) != (after == NodeState::Running)
+/// Whether a transition crosses "serving", which is the half of the shell
+/// context the node owns: an enrolled node that answers is what the portal
+/// talks to, and anything else sends it back to the realm. A spawned node is
+/// not one yet, so the context must not follow the state alone.
+fn flips(before: &NodeStatus, after: &NodeStatus) -> bool {
+    before.ready != after.ready
 }
 
 fn describe_exit(code: Option<i32>) -> String {
@@ -448,18 +499,27 @@ fn signal_term(_pid: u32) -> bool {
 mod tests {
     use super::*;
 
+    fn status(state: NodeState, ready: bool) -> NodeStatus {
+        NodeStatus {
+            state,
+            ready,
+            ..NodeStatus::default()
+        }
+    }
+
     #[test]
-    fn flips_on_running() {
-        // Reaching and leaving `Running` is what moves the shell context; the
-        // states on the way there leave the portal where it is.
-        assert!(flips(NodeState::Starting, NodeState::Running));
-        assert!(flips(NodeState::Running, NodeState::Stopping));
-        assert!(flips(NodeState::Running, NodeState::Stopped));
-        assert!(flips(NodeState::Running, NodeState::Restarting));
-        assert!(flips(NodeState::Running, NodeState::Failed));
-        assert!(!flips(NodeState::Stopped, NodeState::Starting));
-        assert!(!flips(NodeState::Starting, NodeState::BinaryMissing));
-        assert!(!flips(NodeState::Restarting, NodeState::Stopped));
-        assert!(!flips(NodeState::Running, NodeState::Running));
+    fn flips_on_serving() {
+        // Only a node that answers moves the shell context: a spawned one binds
+        // nothing yet, and every way out of serving takes the portal back.
+        let spawned = status(NodeState::Running, false);
+        let serving = status(NodeState::Running, true);
+        assert!(!flips(&status(NodeState::Stopped, false), &spawned));
+        assert!(flips(&spawned, &serving));
+        assert!(flips(&serving, &status(NodeState::Stopping, false)));
+        assert!(flips(&serving, &status(NodeState::Restarting, false)));
+        assert!(flips(&serving, &status(NodeState::Failed, false)));
+        assert!(!flips(&spawned, &status(NodeState::Restarting, false)));
+        assert!(!flips(&status(NodeState::Starting, false), &spawned));
+        assert!(!flips(&serving, &serving.clone()));
     }
 }

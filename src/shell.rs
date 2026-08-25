@@ -11,7 +11,6 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::bridge;
-use crate::node::NodeState;
 use crate::settings::NodeSettings;
 use crate::state::AppState;
 use crate::windows;
@@ -48,11 +47,12 @@ pub struct ShellContext {
     pub features: Features,
 }
 
-/// Picks what the portal talks to. An enrolled node that is running owns the
-/// device's data, so it wins; otherwise the remembered realm answers, and with
-/// neither there is only the local node to point at.
-pub fn context(settings: &NodeSettings, running: bool) -> ShellContext {
-    let local = settings.enrolled && running;
+/// Picks what the portal talks to. An enrolled node that is **serving** owns
+/// the device's data, so it wins; otherwise the remembered realm answers, and
+/// with neither there is only the local node to point at. A spawned node is not
+/// a serving one: it binds its API only once its join and startup are done.
+pub fn context(settings: &NodeSettings, ready: bool) -> ShellContext {
+    let local = settings.enrolled && ready;
     let api_base_url = match (local, settings.realm_url.as_deref()) {
         (false, Some(realm)) => settings
             .realm_api_url
@@ -110,12 +110,11 @@ pub fn sync(app: &AppHandle) {
 /// from what the portal was last told.
 fn apply(app: &AppHandle) {
     let state = app.state::<AppState>();
-    let running = state.supervisor.status().state == NodeState::Running;
-    let wanted = context(&state.settings(), running);
-
-    // The lock is not held across the emit: `shell_context` answers from it.
+    // Computed under the lock, so two syncs cannot store their contexts in one
+    // order and number them in another. The lock is never held across the emit.
     let moved = {
         let mut current = state.shell.lock().expect("shell poisoned");
+        let wanted = context(&state.settings(), state.supervisor.status().ready);
         advance(&mut current, wanted)
     };
     if let Some(context) = moved
@@ -156,7 +155,8 @@ mod tests {
 
     #[test]
     fn falls_back_to_the_realm() {
-        // A stopped or unenrolled node leaves the realm as the only API there is.
+        // A node that is not serving yet, or not enrolled, leaves the realm as
+        // the only API there is.
         let mut settings = enrolled();
         assert_eq!(
             context(&settings, false).api_base_url,
