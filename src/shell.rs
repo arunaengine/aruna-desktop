@@ -1,12 +1,14 @@
-//! The context the portal reads before its first script runs.
+//! The context the portal reads before its first script runs, and follows
+//! afterwards.
 //!
 //! One portal build serves the web and this shell. On the web it finds no
 //! `window.__ARUNA_DESKTOP__` and behaves like any hosted portal; here the
 //! shell defines it in an initialization script, which the webview runs at
-//! document start, so the bundle sees it the moment it boots.
+//! document start, so the bundle sees it the moment it boots. The window is
+//! never replaced: every later move is emitted as `context-changed` instead.
 
 use serde::Serialize;
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 
 use crate::bridge;
 use crate::node::NodeState;
@@ -16,7 +18,11 @@ use crate::windows;
 
 /// The command set this shell implements. The portal pins it, so a shell that
 /// answers fewer commands must not claim this version.
-pub const BRIDGE_VERSION: u32 = 2;
+pub const BRIDGE_VERSION: u32 = 3;
+
+/// Emitted to the app window whenever what the portal must talk to has moved.
+/// It carries the whole context, in the shape the script injected.
+pub const CONTEXT_EVENT: &str = "context-changed";
 
 /// Runtime switches the portal reads. Both are what this shell always is: the
 /// desktop views exist, and sign-in leaves through the system browser.
@@ -40,22 +46,6 @@ pub struct ShellContext {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub realm_url: Option<String>,
     pub features: Features,
-}
-
-/// The app window and the context it was opened with. The context is fixed for
-/// the life of a webview, so both move together.
-pub struct Shell {
-    pub context: ShellContext,
-    pub label: String,
-}
-
-impl Shell {
-    pub fn new(context: ShellContext) -> Self {
-        Self {
-            context,
-            label: windows::MAIN_LABEL.to_string(),
-        }
-    }
 }
 
 /// Picks what the portal talks to. An enrolled node that is running owns the
@@ -107,8 +97,8 @@ pub fn init_script(context: &ShellContext) -> String {
     )
 }
 
-/// Applies the current context, on the next turn of the runtime so the command
-/// that changed it still answers first.
+/// Recomputes the context and tells the window when it moved, on the next turn
+/// of the runtime so the command that changed it still answers first.
 pub fn sync(app: &AppHandle) {
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
@@ -116,56 +106,33 @@ pub fn sync(app: &AppHandle) {
     });
 }
 
-/// A connect must always land in the portal: when the context is already the
-/// wanted one no replacement happens, so the page waiting for one is sent to
-/// the portal root instead.
-pub fn reconnect(app: &AppHandle) {
-    let app = app.clone();
-    tauri::async_runtime::spawn(async move {
-        if !apply(&app)
-            && let Err(error) = windows::navigate_main(&app, "/")
-        {
-            tracing::warn!(%error, "Could not reopen the portal");
-        }
-    });
-}
-
-/// Replaces the app window when what the portal must talk to has moved. The
-/// injected context cannot be changed after a webview is created, so a reload
-/// would only run the old script again. Answers whether a replacement was due.
-fn apply(app: &AppHandle) -> bool {
+/// Stores what the portal must talk to now and emits it once, when it differs
+/// from what the portal was last told.
+fn apply(app: &AppHandle) {
     let state = app.state::<AppState>();
     let running = state.supervisor.status().state == NodeState::Running;
     let wanted = context(&state.settings(), running);
 
-    // The lock is not held across the swap: window creation and the callers
-    // that look the window up by its label both need it.
-    let (current, label) = {
-        let shell = state.shell.lock().expect("shell poisoned");
-        if shell.context == wanted {
-            return false;
-        }
-        (shell.label.clone(), next_label(&shell.label))
+    // The lock is not held across the emit: `shell_context` answers from it.
+    let moved = {
+        let mut current = state.shell.lock().expect("shell poisoned");
+        advance(&mut current, wanted)
     };
-    match windows::replace_main(app, &current, &label, &wanted) {
-        Ok(()) => {
-            let mut shell = state.shell.lock().expect("shell poisoned");
-            shell.context = wanted;
-            shell.label = label;
-        }
-        Err(error) => tracing::warn!(%error, "Could not apply the shell context"),
+    if let Some(context) = moved
+        && let Err(error) = app.emit_to(windows::MAIN_LABEL, CONTEXT_EVENT, context)
+    {
+        tracing::warn!(%error, "Could not emit the shell context");
     }
-    true
 }
 
-/// A label the old window no longer holds: closing one and opening another with
-/// the same name would race the teardown.
-fn next_label(current: &str) -> String {
-    let generation = current
-        .rsplit_once('-')
-        .and_then(|(_, tail)| tail.parse::<u32>().ok())
-        .unwrap_or(0);
-    format!("{}-{}", windows::MAIN_LABEL, generation + 1)
+/// Stores `wanted` when it differs and answers the payload to emit; `None`
+/// while the portal already has the context it needs.
+fn advance(current: &mut ShellContext, wanted: ShellContext) -> Option<ShellContext> {
+    if *current == wanted {
+        return None;
+    }
+    *current = wanted.clone();
+    Some(wanted)
 }
 
 #[cfg(test)]
@@ -241,15 +208,35 @@ mod tests {
         assert!(script.contains("\"apiBaseUrl\":\"http://127.0.0.1:34116/api/v1\""));
         assert!(script.contains("\"realmUrl\":\"https://aruna.example\""));
         assert!(script.contains("\"systemBrowserAuth\":true"));
-        assert!(script.contains("version: 2"));
+        assert!(script.contains("version: 3"));
         assert!(script.contains("Object.defineProperty(window, '__ARUNA_DESKTOP__'"));
         assert!(script.contains("Object.freeze(context)"));
     }
 
     #[test]
-    fn counts_window_generations() {
-        assert_eq!(next_label("main"), "main-1");
-        assert_eq!(next_label("main-1"), "main-2");
-        assert_eq!(next_label("main-11"), "main-12");
+    fn emits_only_on_change() {
+        // The portal is told once per move, and never told what it already has.
+        let mut current = context(&NodeSettings::default(), false);
+        let same = current.clone();
+        assert!(advance(&mut current, same).is_none());
+
+        let wanted = context(&enrolled(), false);
+        let emitted = advance(&mut current, wanted.clone()).expect("a moved context");
+        assert_eq!(emitted, wanted);
+        assert_eq!(emitted.api_base_url, "https://aruna.example/api/v1");
+        // What `shell_context` answers from here on.
+        assert_eq!(current, wanted);
+        assert!(advance(&mut current, wanted).is_none());
+    }
+
+    #[test]
+    fn answers_one_shape() {
+        // The command and the event carry what the script injects, minus the
+        // bridge, which is a function the shell cannot serialize.
+        let context = context(&enrolled(), true);
+        let json = serde_json::to_string(&context).expect("the shell context is serializable");
+        assert!(init_script(&context).contains(&json));
+        assert!(!json.contains("bridge"));
+        assert!(json.contains("\"apiBaseUrl\""));
     }
 }

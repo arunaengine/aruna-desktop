@@ -8,7 +8,7 @@ use crate::enroll::{EnrollProgress, Tracker};
 use crate::error::DesktopError;
 use crate::node::Supervisor;
 use crate::settings::NodeSettings;
-use crate::shell::{self, Shell};
+use crate::shell::{self, ShellContext};
 
 pub struct AppState {
     pub settings: Arc<Mutex<NodeSettings>>,
@@ -19,8 +19,9 @@ pub struct AppState {
     pub enroll: Mutex<Tracker>,
     /// The last `aruna://enroll` outcome, for a portal that missed its event.
     pub invite: LastInvite,
-    /// The app window and the context its webview was opened with.
-    pub shell: Mutex<Shell>,
+    /// What the portal was last told to talk to: injected at boot, emitted as
+    /// `context-changed` afterwards, and answered by `shell_context`.
+    pub shell: Mutex<ShellContext>,
 }
 
 impl AppState {
@@ -55,12 +56,8 @@ impl AppState {
             http: reqwest::Client::new(),
             enroll: Mutex::new(tracker),
             invite: LastInvite::default(),
-            shell: Mutex::new(Shell::new(context)),
+            shell: Mutex::new(context),
         })
-    }
-
-    pub fn main_label(&self) -> String {
-        self.shell.lock().expect("shell poisoned").label.clone()
     }
 
     pub fn settings(&self) -> NodeSettings {

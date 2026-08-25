@@ -283,7 +283,7 @@ pub async fn validate_realm(
     let mut settings = state.settings();
     settings.remember_realm(&target.origin, &target.api_base_url);
     state.store(settings)?;
-    shell::reconnect(&app);
+    shell::sync(&app);
     Ok(target)
 }
 

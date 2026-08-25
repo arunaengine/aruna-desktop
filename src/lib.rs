@@ -76,9 +76,9 @@ pub fn run() {
             let state = AppState::build(&handle)?;
             let settings = state.settings();
             let auto_start = settings.auto_start && !settings.paused;
-            let context = state.shell.lock().expect("shell poisoned").context.clone();
+            let context = state.shell.lock().expect("shell poisoned").clone();
             app.manage(state);
-            windows::open_main(&handle, windows::MAIN_LABEL, &context, "index.html")?;
+            windows::open_main(&handle, &context)?;
 
             // Dev builds carry no installed desktop entry, so the scheme is
             // claimed at runtime where the platform allows it.
