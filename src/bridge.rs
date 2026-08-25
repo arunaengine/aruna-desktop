@@ -19,12 +19,13 @@ use crate::node::compute::ComputeProbe;
 use crate::node::{self, NodeInfo, NodeState, NodeStatus};
 use crate::realm::{self, RealmTarget};
 use crate::settings::{LocalSettings, NodeSettings, SettingsPatch};
-use crate::shell;
+use crate::shell::{self, ShellContext};
 use crate::state::AppState;
 
 /// Every command this shell answers. A name that is not here is rejected as
 /// unknown, which the portal reads as a bridge missing that half.
-pub const KNOWN: [&str; 12] = [
+pub const KNOWN: [&str; 13] = [
+    "shell_context",
     "node_status",
     "node_logs_tail",
     "node_settings_get",
@@ -88,6 +89,14 @@ pub struct DeviceStatus {
 pub struct EnrollResult {
     pub node_id: Option<String>,
     pub realm: Option<String>,
+}
+
+/// What the portal must talk to right now, in the shape the initialization
+/// script injected, minus the bridge. The same payload arrives as
+/// `context-changed`; this is how a portal that missed one reads it back.
+#[tauri::command]
+pub fn shell_context(state: State<'_, AppState>) -> ShellContext {
+    state.shell.lock().expect("shell poisoned").clone()
 }
 
 /// Supervisor state of the embedded node, and the enrollment it is finishing.

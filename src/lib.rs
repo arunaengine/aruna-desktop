@@ -43,6 +43,7 @@ pub fn run() {
     // "unknown" is what the portal reads as a bridge without that half.
     let commands: Box<dyn Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Send + Sync> =
         Box::new(tauri::generate_handler![
+            bridge::shell_context,
             bridge::node_status,
             bridge::node_logs_tail,
             bridge::node_settings_get,
