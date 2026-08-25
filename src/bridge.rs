@@ -73,6 +73,10 @@ impl From<NodeState> for DeviceState {
 #[serde(rename_all = "camelCase")]
 pub struct DeviceStatus {
     pub state: DeviceState,
+    /// Whether the node answers yet. `running` is where it starts serving, not
+    /// where it was spawned, and the shell context follows this rather than the
+    /// state.
+    pub ready: bool,
     pub node_id: Option<String>,
     pub realm: Option<String>,
     pub enrolled: bool,
@@ -117,6 +121,7 @@ pub async fn node_status(
     let info = seen.map(|seen| seen.info).unwrap_or_default();
     Ok(DeviceStatus {
         state: node.state.into(),
+        ready: node.ready,
         node_id: None,
         realm: info.realm.or(settings.realm.clone()),
         enrolled: settings.enrolled,

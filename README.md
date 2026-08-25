@@ -107,7 +107,7 @@ reports as a missing bridge half rather than a failed call.
 | Command | Arguments | Answers |
 | --- | --- | --- |
 | `shell_context` | – | `{revision, apiBaseUrl, authCallbackOrigin?, realmUrl?, features}` |
-| `node_status` | – | `{state, nodeId, realm, enrolled, apiBaseUrl, version, uptimeSeconds, message}` |
+| `node_status` | – | `{state, ready, nodeId, realm, enrolled, apiBaseUrl, version, uptimeSeconds, message}` |
 | `node_logs_tail` | `{lines}` | the last lines of the node's output, oldest first |
 | `node_settings_get` | – | `{storagePath, compute, paused, autoStart}` |
 | `node_settings_set` | `{settings}` (any subset) | the stored settings |
@@ -126,6 +126,9 @@ Notes on the ones that do more than they say:
   `bridge`**, as it stands now rather than as it was at boot. It is the same
   payload `context-changed` sends, so a portal that starts late, missed an event
   or wants to be sure reads it here.
+* `node_status` reports `ready` beside `state`, because `running` is reached at
+  spawn and a node serves a little later: it is the same flag the `node-status`
+  event carries, and the one the shell context follows.
 * `node_status` is also where a running enrollment is observed: it probes the
   node, advances the join, and spends the one-time secret once the node serves
   the realm. `nodeId` stays `null` — a node reports its own id only to a caller
