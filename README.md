@@ -3,14 +3,16 @@
 A Tauri v2 desktop shell that runs an Aruna **user node** on the owner's own
 machine and hosts the Aruna portal around it.
 
-The app has **one window**, and that window shows the portal: the same build an
-Aruna node serves at its own root, with no fork and no desktop variant. What
-makes it a desktop app is what the shell injects before the portal's first
-script runs, and the commands it answers afterwards.
+The app has **one window**, opened once and kept for the life of the app, and
+that window shows the portal: the same build an Aruna node serves at its own
+root, with no fork and no desktop variant. What makes it a desktop app is what
+the shell injects before the portal's first script runs, the commands it answers
+afterwards, and the events it sends when what it injected has moved.
 
 ```
 window  ->  the portal artifact in ui/        (one build, web and desktop)
 shell   ->  window.__ARUNA_DESKTOP__          (api base, features, bridge)
+events  ->  context-changed, node-status      (what moved since boot)
 bridge  ->  node supervisor, settings, compute probe, enrollment, paths, wipe
 node    ->  a supervised aruna child process on loopback
 ```
@@ -48,12 +50,12 @@ hosted portal.
   "apiBaseUrl": "http://127.0.0.1:34116/api/v1",
   "authCallbackOrigin": "http://127.0.0.1:34115", // only with a local portal
   "features": { "desktop": true, "systemBrowserAuth": true },
-  "bridge": { "invoke": "…", "version": 2 }
+  "bridge": { "invoke": "…", "version": 3 }
 }
 ```
 
 `version` is the command set below. A shell that answers fewer commands must not
-claim version 2.
+claim version 3.
 
 ### Which API the portal talks to
 
@@ -64,14 +66,18 @@ claim version 2.
 | neither | `http://127.0.0.1:34116/api/v1`, the only API this app knows |
 
 An initialization script cannot be changed after its webview exists, and a
-reload would only run the old one again. So when the choice above moves — a
-realm is connected, an enrollment finishes, a device is wiped, the node starts
-or stops — the shell **replaces the app window** with one carrying the new
-script, on the page the old window was showing. The new window is opened before
-the old one is destroyed, and it takes the next free label (`main`, `main-1`,
-`main-2`, …) so it never races the teardown of the one it replaces. The check
-runs after every command that can move the choice, one turn later, so the
-command still answers first.
+reload would only run the old one again. So the injected object is the **first**
+context, not the only one: when the choice above moves — a realm is connected,
+an enrollment finishes, a device is wiped, the node starts or stops — the shell
+emits [`context-changed`](#events) carrying the whole context in the same shape,
+and `shell_context` answers the same object on demand. The window is never
+replaced and the page is never reloaded; the portal switches its API base in
+place and keeps the route the owner is on.
+
+The check runs after every command and every node state change that can move the
+choice, one turn later, so the command still answers first and the event always
+describes state that is already stored. A context equal to the one the portal
+was last told is **not** emitted, so the portal sees one event per move.
 
 `authCallbackOrigin` is set only while the node serves its own portal listener,
 because that loopback origin is the only `http` redirect URI this device can
@@ -80,12 +86,13 @@ accepts.
 
 ## Commands
 
-Contract version 2. Arguments are a single object; answers are JSON. A name the
+Contract version 3. Arguments are a single object; answers are JSON. A name the
 shell does not implement is rejected with `unknown command: …`, which the portal
 reports as a missing bridge half rather than a failed call.
 
 | Command | Arguments | Answers |
 | --- | --- | --- |
+| `shell_context` | – | `{apiBaseUrl, authCallbackOrigin?, realmUrl?, features}` |
 | `node_status` | – | `{state, nodeId, realm, enrolled, apiBaseUrl, version, uptimeSeconds, message}` |
 | `node_logs_tail` | `{lines}` | the last lines of the node's output, oldest first |
 | `node_settings_get` | – | `{storagePath, compute, paused, autoStart}` |
@@ -101,6 +108,10 @@ reports as a missing bridge half rather than a failed call.
 
 Notes on the ones that do more than they say:
 
+* `shell_context` answers what `window.__ARUNA_DESKTOP__` carries **minus
+  `bridge`**, as it stands now rather than as it was at boot. It is the same
+  payload `context-changed` sends, so a portal that starts late, missed an event
+  or wants to be sure reads it here.
 * `node_status` is also where a running enrollment is observed: it probes the
   node, advances the join, and spends the one-time secret once the node serves
   the realm. `nodeId` stays `null` — a node reports its own id only to a caller
@@ -143,7 +154,33 @@ Notes on the ones that do more than they say:
   emitted, in exactly the shape it was emitted, and never carries the secret. It
   is how a portal that subscribed after a cold-start link still sees it, so it
   serves that payload **once**: collecting it clears it, and a later visit gets
-  `null` rather than reopening an old outcome. A wipe clears it too.
+  `null` rather than replaying an old outcome. A wipe clears it too.
+
+## Events
+
+Three events reach the app window. None of them is a source of truth: each has a
+command answering the same thing, so a portal that missed one is never stuck.
+
+| Event | Payload | Emitted |
+| --- | --- | --- |
+| `context-changed` | the shell context, as injected minus `bridge` | whenever the context moves, once per move, never unchanged |
+| `node-status` | `{state, pid, binary, detail, restarts, lastExit}` | on every supervisor state change |
+| `enroll-invite` | [see below](#enroll-invite) | once an `aruna://enroll` link has been acted on |
+
+`context-changed` is emitted after `validate_realm`, after `node_settings_set`,
+after `enroll_apply` and an armed `aruna://enroll`, after `wipe_device`, while
+`node_status` settles a finishing enrollment, and on every node transition into
+or out of `Running` — a start, a stop, a pause, a restart or a failure. Each of
+those publishes its own state first, so the context the event carries is the one
+`shell_context` answers with.
+
+```jsonc
+{
+  "apiBaseUrl": "https://aruna.example/api/v1",
+  "realmUrl": "https://aruna.example",
+  "features": { "desktop": true, "systemBrowserAuth": true }
+}
+```
 
 ## The portal artifact
 
