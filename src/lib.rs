@@ -54,6 +54,7 @@ pub fn run() {
             bridge::pick_directory,
             bridge::reveal_path,
             bridge::open_external,
+            bridge::auth_open,
             bridge::validate_realm,
             bridge::enroll_invite_last,
         ]);

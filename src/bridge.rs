@@ -21,10 +21,11 @@ use crate::realm::{self, RealmTarget};
 use crate::settings::{LocalSettings, NodeSettings, SettingsPatch};
 use crate::shell::{self, ShellContext};
 use crate::state::AppState;
+use crate::windows;
 
 /// Every command this shell answers. A name that is not here is rejected as
 /// unknown, which the portal reads as a bridge missing that half.
-pub const KNOWN: [&str; 13] = [
+pub const KNOWN: [&str; 14] = [
     "shell_context",
     "node_status",
     "node_logs_tail",
@@ -36,6 +37,7 @@ pub const KNOWN: [&str; 13] = [
     "pick_directory",
     "reveal_path",
     "open_external",
+    "auth_open",
     "validate_realm",
     "enroll_invite_last",
 ];
@@ -383,6 +385,16 @@ pub fn open_external(app: AppHandle, url: String) -> Result<(), DesktopError> {
     app.opener()
         .open_url(target, None::<&str>)
         .map_err(|error| DesktopError::Unreachable(error.to_string()))
+}
+
+/// Opens the provider's sign-in page in a window of the app's own, which
+/// catches the redirect back itself. Only a web address is opened.
+#[tauri::command]
+pub fn auth_open(app: AppHandle, url: String) -> Result<(), DesktopError> {
+    let target = url::Url::parse(&web_url(&url)?)
+        .map_err(|error| DesktopError::Link(format!("unreadable URL: {error}")))?;
+    windows::open_login(&app, target)?;
+    Ok(())
 }
 
 fn web_url(raw: &str) -> Result<String, DesktopError> {

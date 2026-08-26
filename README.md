@@ -50,13 +50,13 @@ hosted portal.
   "revision": 0,                                  // 0 is the injected one
   "apiBaseUrl": "http://127.0.0.1:34116/api/v1",
   "authCallbackOrigin": "http://127.0.0.1:34115", // only with a local portal
-  "features": { "desktop": true, "systemBrowserAuth": true },
-  "bridge": { "invoke": "…", "version": 3 }
+  "features": { "desktop": true, "systemBrowserAuth": false, "embeddedAuth": true },
+  "bridge": { "invoke": "…", "version": 4 }
 }
 ```
 
 `version` is the command set below. A shell that answers fewer commands must not
-claim version 3.
+claim version 4.
 
 ### Which API the portal talks to
 
@@ -100,7 +100,7 @@ accepts.
 
 ## Commands
 
-Contract version 3. Arguments are a single object; answers are JSON. A name the
+Contract version 4. Arguments are a single object; answers are JSON. A name the
 shell does not implement is rejected with `unknown command: …`, which the portal
 reports as a missing bridge half rather than a failed call.
 
@@ -117,6 +117,7 @@ reports as a missing bridge half rather than a failed call.
 | `pick_directory` | `{title?, startPath?}` | the chosen path, or `null` |
 | `reveal_path` | `{path}` | – |
 | `open_external` | `{url}` | – |
+| `auth_open` | `{url}` | – |
 | `validate_realm` | `{input}` | `{origin, realm, apiVersion, portal, redirectedFrom}` |
 | `enroll_invite_last` | – | the uncollected `enroll-invite` payload, or `null` |
 
@@ -179,6 +180,9 @@ Notes on the ones that do more than they say:
   is a realm this device is no longer in.
 * `open_external` opens `http` and `https` in the system browser and refuses
   every other scheme.
+* `auth_open` opens an `http` or `https` sign-in page in a window of the app's
+  own, labelled `login`, and refuses every other scheme. See [Sign-in](#sign-in)
+  for how that window comes back.
 * `enroll_invite_last` answers with the last `enroll-invite` payload the shell
   emitted, in exactly the shape it was emitted, and never carries the secret. It
   is how a portal that subscribed after a cold-start link still sees it, so it
@@ -187,9 +191,9 @@ Notes on the ones that do more than they say:
 
 ## Events
 
-Four events reach the app window, and none of them is a source of truth: the
-first three have a command answering the same thing, and the fourth is a
-deep link the owner followed.
+Five events reach the app window, and none of them is a source of truth: the
+first three have a command answering the same thing, the fourth is a deep link
+the owner followed, and the fifth is a sign-in window the owner closed.
 
 | Event | Payload | Emitted |
 | --- | --- | --- |
@@ -197,6 +201,7 @@ deep link the owner followed.
 | `node-status` | `{state, ready, pid, binary, detail, restarts, lastExit}` | on every supervisor state change |
 | `enroll-invite` | [see below](#enroll-invite) | once an `aruna://enroll` link has been acted on |
 | `navigate` | `{path}` | when a deep link belongs in the portal's router |
+| `auth-cancelled` | – | when the `login` window went away before the provider answered |
 
 `context-changed` is emitted after `validate_realm`, after `node_settings_set`,
 after `enroll_apply` and an armed `aruna://enroll`, after `wipe_device`, while
@@ -210,7 +215,7 @@ carries is the one `shell_context` answers with.
   "revision": 3,
   "apiBaseUrl": "https://aruna.example/api/v1",
   "realmUrl": "https://aruna.example",
-  "features": { "desktop": true, "systemBrowserAuth": true }
+  "features": { "desktop": true, "systemBrowserAuth": false, "embeddedAuth": true }
 }
 ```
 
@@ -552,10 +557,19 @@ A node that cannot stay up fails the enrollment once the supervisor gives up.
 
 ## Sign-in
 
-Sign-in leaves through the system browser (`systemBrowserAuth`, RFC 8252): the
-portal hands the authorization URL to `open_external`, and the app is brought
-back by `aruna://auth/callback`, which lands on the portal's own callback route
-inside the app window.
+Sign-in stays inside the app (`embeddedAuth`): the portal hands the
+authorization URL to `auth_open`, which opens the provider's page in a window
+of the app's own. The provider still redirects to `aruna://auth/callback`; that
+navigation is intercepted before it loads, routed exactly like the deep link
+and landed on the portal's callback route in the app window, and the sign-in
+window closes on it. A sign-in window the owner closes instead emits
+`auth-cancelled`, so the portal drops the sign-in it was waiting on.
+
+The redirect URI is unchanged from the system-browser flow, so no provider
+configuration moves, and an `aruna://auth/callback` link that arrives from the
+outside is still accepted. The `systemBrowserAuth` flag is what the shell
+switches off for this; a portal that reads neither flag falls back to
+navigating its own window.
 
 Which redirect URI a realm registers is still open, and it is a portal and
 provider decision rather than a shell one. The shell accepts the deep link

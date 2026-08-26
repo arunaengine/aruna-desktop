@@ -1,15 +1,24 @@
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
+use url::Url;
 
+use crate::deep_link;
 use crate::error::DesktopError;
 use crate::shell::{self, ShellContext};
 
 pub const MAIN_LABEL: &str = "main";
+pub const LOGIN_LABEL: &str = "login";
 
 /// Emitted to the app window when a deep link belongs in the portal's router.
 pub const NAVIGATE_EVENT: &str = "navigate";
+
+/// Emitted to the app window when the sign-in window went away before the
+/// provider answered, so the portal drops the sign-in it was waiting on.
+pub const AUTH_CANCELLED_EVENT: &str = "auth-cancelled";
 
 /// What the window opens on; Tauri reads it as the app root.
 const ROOT: &str = "index.html";
@@ -40,6 +49,49 @@ pub fn open_main(app: &AppHandle, context: &ShellContext) -> Result<WebviewWindo
             .initialization_script(shell::init_script(context))
             .build()?,
     )
+}
+
+/// Opens the provider's sign-in page in a window of the app's own. The provider
+/// redirects to this app's scheme; that navigation is never loaded but routed
+/// like a deep link, and the window closes on it. Closing it any other way
+/// tells the portal the sign-in was abandoned.
+pub fn open_login(app: &AppHandle, url: Url) -> Result<WebviewWindow, DesktopError> {
+    if let Some(open) = app.get_webview_window(LOGIN_LABEL) {
+        open.destroy()?;
+    }
+    let claimed = Arc::new(AtomicBool::new(false));
+    let router = app.clone();
+    let claim = claimed.clone();
+    let window = WebviewWindowBuilder::new(app, LOGIN_LABEL, WebviewUrl::External(url))
+        .title("Sign in to Aruna")
+        .icon(tauri::include_image!("icons/128x128.png"))?
+        .inner_size(560.0, 780.0)
+        .min_inner_size(420.0, 560.0)
+        .on_navigation(move |target| {
+            if target.scheme() != deep_link::SCHEME {
+                return true;
+            }
+            claim.store(true, Ordering::SeqCst);
+            let app = router.clone();
+            let link = target.to_string();
+            // Routed off the webview's own thread: handling it closes this window.
+            let _ = router.run_on_main_thread(move || {
+                deep_link::handle(&app, &link);
+                if let Some(login) = app.get_webview_window(LOGIN_LABEL) {
+                    let _ = login.destroy();
+                }
+            });
+            false
+        })
+        .build()?;
+    let owner = app.clone();
+    window.on_window_event(move |event| {
+        if matches!(event, tauri::WindowEvent::Destroyed) && !claimed.load(Ordering::SeqCst) {
+            let _ = owner.emit_to(MAIN_LABEL, AUTH_CANCELLED_EVENT, ());
+            focus_main(&owner);
+        }
+    });
+    Ok(window)
 }
 
 /// Where a deep link wants the portal's router: a route of the portal root,

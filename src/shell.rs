@@ -17,19 +17,21 @@ use crate::windows;
 
 /// The command set this shell implements. The portal pins it, so a shell that
 /// answers fewer commands must not claim this version.
-pub const BRIDGE_VERSION: u32 = 3;
+pub const BRIDGE_VERSION: u32 = 4;
 
 /// Emitted to the app window whenever what the portal must talk to has moved.
 /// It carries the whole context, in the shape the script injected.
 pub const CONTEXT_EVENT: &str = "context-changed";
 
-/// Runtime switches the portal reads. Both are what this shell always is: the
-/// desktop views exist, and sign-in leaves through the system browser.
+/// Runtime switches the portal reads, all fixed for this shell: the desktop
+/// views exist, and sign-in runs in a window of the app's own rather than in
+/// the system browser.
 #[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct Features {
     pub desktop: bool,
     pub system_browser_auth: bool,
+    pub embedded_auth: bool,
 }
 
 /// What the portal is told at boot. `bridge` is added by the script itself,
@@ -75,7 +77,8 @@ pub fn context(settings: &NodeSettings, ready: bool) -> ShellContext {
         realm_url: settings.realm_url.clone(),
         features: Features {
             desktop: true,
-            system_browser_auth: true,
+            system_browser_auth: false,
+            embedded_auth: true,
         },
     }
 }
@@ -228,8 +231,9 @@ mod tests {
         assert!(script.contains("\"revision\":0"));
         assert!(script.contains("\"apiBaseUrl\":\"http://127.0.0.1:34116/api/v1\""));
         assert!(script.contains("\"realmUrl\":\"https://aruna.example\""));
-        assert!(script.contains("\"systemBrowserAuth\":true"));
-        assert!(script.contains("version: 3"));
+        assert!(script.contains("\"systemBrowserAuth\":false"));
+        assert!(script.contains("\"embeddedAuth\":true"));
+        assert!(script.contains("version: 4"));
         assert!(script.contains("Object.defineProperty(window, '__ARUNA_DESKTOP__'"));
         assert!(script.contains("Object.freeze(context)"));
     }
