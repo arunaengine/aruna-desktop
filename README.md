@@ -69,14 +69,14 @@ claim version 3.
 **Serving**, not spawned. A node binds its listeners only once its join and its
 startup are done, so a freshly started one would refuse the portal's first
 request. The shell polls `readyz` on the ops port for as long as the child lives
-and only then calls the node ready; losing readiness — a stop, a pause, a
-restart, a failure — takes the portal back to the realm. The same probe is one
+and only then calls the node ready; losing readiness (a stop, a pause, a
+restart, a failure) takes the portal back to the realm. The same probe is one
 of [the two signals](#the-two-signals) an enrollment is watched by.
 
 An initialization script cannot be changed after its webview exists, and a
 reload would only run the old one again. So the injected object is the **first**
-context, not the only one: when the choice above moves — a realm is connected,
-an enrollment finishes, a device is wiped, the node starts serving or stops —
+context, not the only one: when the choice above moves (a realm is connected,
+an enrollment finishes, a device is wiped, the node starts serving or stops),
 the shell emits [`context-changed`](#events) carrying the whole context in the
 same shape, and `shell_context` answers the same object on demand. The window is
 never replaced and the page is never reloaded; the portal switches its API base
@@ -89,7 +89,7 @@ was last told is **not** emitted, so the portal sees one event per move.
 
 `revision` numbers those moves: `0` is what the script injected, and each stored
 change adds one. Events are emitted outside the lock that stores them, so two
-moves in the same instant can arrive in either order — the portal keeps the
+moves in the same instant can arrive in either order; the portal keeps the
 highest revision it has seen and drops anything that is not newer, including a
 `shell_context` answer that lost a race with an event.
 
@@ -129,11 +129,11 @@ Notes on the ones that do more than they say:
 * `node_status` reports `ready` beside `state`, because `running` is reached at
   spawn and a node serves a little later: it is the same flag the `node-status`
   event carries, and the one the shell context follows. `apiBaseUrl` follows it
-  too — it is filled only while the node **serves**, never while it is merely
+  too; it is filled only while the node **serves**, never while it is merely
   running, so it is never an address that would refuse the call.
 * `node_status` is also where a running enrollment is observed: it probes the
   node, advances the join, and spends the one-time secret once the node serves
-  the realm. `nodeId` stays `null` — a node reports its own id only to a caller
+  the realm. `nodeId` stays `null`; a node reports its own id only to a caller
   holding a realm token, which the shell never has, so the portal reads it with
   the owner's own.
 * `node_settings_set` stops the node when `paused` turns on and starts it when
@@ -151,7 +151,7 @@ Notes on the ones that do more than they say:
   apptainer backend without one, so the shell does not choose apptainer while
   `cgroupOk` is false.
 * `reveal_path` shows a path in the owner's file manager. It must be absolute
-  and must exist — a relative one would resolve against the app's own directory,
+  and must exist; a relative one would resolve against the app's own directory,
   and there is nothing to show for a path that is not there. Where it points is
   not restricted: revealing opens a window, reads nothing, and the owner's
   folders live wherever they put them.
@@ -161,7 +161,7 @@ Notes on the ones that do more than they say:
 * `wipe_device` re-checks `confirm` against `wipe`, stops the node, deletes the
   data directory the shell provisioned (and a storage directory outside it),
   clears the enrollment and the storage override, and keeps the machine
-  configuration **and the remembered realm** — a wiped device still needs a
+  configuration **and the remembered realm**; a wiped device still needs a
   portal to sign in to, and joining another realm starts there. A path that is
   not deep enough to be one of ours is refused rather than deleted. The node's
   own REST wipe is a separate surface, and it is the one that drops the
@@ -197,7 +197,7 @@ deep link the owner followed.
 `context-changed` is emitted after `validate_realm`, after `node_settings_set`,
 after `enroll_apply` and an armed `aruna://enroll`, after `wipe_device`, while
 `node_status` settles a finishing enrollment, and on every node transition into
-or out of **serving** — the node answering, a stop, a pause, a restart, or a
+or out of **serving**: the node answering, a stop, a pause, a restart, or a
 failure. Each of those stores its own state first, so the context the event
 carries is the one `shell_context` answers with.
 
@@ -220,9 +220,9 @@ fragment the link arrived with, and the window is brought forward with it:
 It is an event rather than a navigation because loading that URL would reload
 the page and throw away the session and the context the portal has built. The
 cost is a **cold start**: a link that launches the app can route before the
-portal is listening. An `aruna://enroll` link is covered — its outcome waits in
+portal is listening. An `aruna://enroll` link is covered (its outcome waits in
 `enroll_invite_last`, and the device page reads the same enrollment out of
-`node_status` — while an `aruna://auth/callback` into a cold start is out of
+`node_status`), while an `aruna://auth/callback` into a cold start is out of
 scope: a sign-in this app started has a portal listening by definition.
 
 ## The portal artifact
@@ -380,9 +380,9 @@ Two rows of the env table are the device profile itself:
 The owner may run their own jobs on this machine (**never** the realm's: the
 node is told so explicitly). Before every node start the shell probes the
 machine, resolves the owner's `backend` choice against what answered, and writes
-the profile below. `ARUNA_COMPUTE_EXECUTOR` is **always** written — `off` when
-nothing was resolved, which is `off` itself or a machine with no usable backend
-— and the rest of the profile only while an executor was resolved. The
+the profile below. `ARUNA_COMPUTE_EXECUTOR` is **always** written (`off` when
+nothing was resolved, which is `off` itself or a machine with no usable backend)
+and the rest of the profile only while an executor was resolved. The
 supervisor also strips every inherited `ARUNA_COMPUTE_*` key from the child, so
 the environment the app was launched from cannot configure the node's compute.
 
@@ -434,7 +434,7 @@ whole local control surface:
 
 A patch may carry any subset of the top level, but `compute` is replaced whole:
 an absent ceiling means "no ceiling", which a per-field merge could not tell
-from "unchanged". Zero is refused for every compute number — `null` is how the
+from "unchanged". Zero is refused for every compute number; `null` is how the
 owner says "no limit".
 
 The starting values are deliberately modest rather than a policy: one job at a
