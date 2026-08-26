@@ -3,3 +3,4 @@ gen/
 ui/
 .env
 *.local
+binaries/

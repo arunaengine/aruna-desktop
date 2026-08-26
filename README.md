@@ -229,6 +229,26 @@ portal is listening. An `aruna://enroll` link is covered (its outcome waits in
 `node_status`), while an `aruna://auth/callback` into a cold start is out of
 scope: a sign-in this app started has a portal listening by definition.
 
+## The node binary
+
+The node the app supervises is the Tauri sidecar `binaries/aruna-<target
+triple>`: the aruna workspace's own release binary, nothing forked. It is
+gitignored and installed with:
+
+```bash
+scripts/sync-node.sh                  # builds ../aruna (or $ARUNA_DIR) in release mode
+scripts/sync-node.sh --no-build       # copies the binary that is already built
+ARUNA_NODE_BIN=/path/to/aruna scripts/sync-node.sh
+```
+
+tauri-build copies it next to the app executable, so a `cargo run` finds it in
+`target/<profile>/aruna`, and packaged builds bundle exactly that file: one
+installer carries the app and its node. The lookup order stays
+`ARUNA_DESKTOP_NODE_BIN`, the `binaryPath` setting, the sidecar next to the
+executable, then the resource directory. Without a synced node the build still
+succeeds: `build.rs` writes a placeholder in the sidecar's place, and the app
+reports `run scripts/sync-node.sh` instead of running it.
+
 ## The portal artifact
 
 `ui/` holds the portal build the window serves. It is gitignored, and it is the
@@ -256,13 +276,18 @@ Two ways to run it:
 
 ```bash
 # 1. against the website's dev server, with hot reload
+scripts/sync-node.sh
 (cd ../website && npx vite --port 1420 --strictPort)
-ARUNA_DESKTOP_NODE_BIN=/path/to/aruna cargo run
+cargo run
 
 # 2. against the installed artifact, as a packaged build serves it
+scripts/sync-node.sh
 scripts/sync-frontend.sh
-ARUNA_DESKTOP_NODE_BIN=/path/to/aruna cargo run --release --features custom-protocol
+cargo run --release --features custom-protocol
 ```
+
+Both find the node through the sidecar `scripts/sync-node.sh` installs;
+`ARUNA_DESKTOP_NODE_BIN=/path/to/aruna` still overrides it for one run.
 
 The `custom-protocol` feature is what embeds `ui/`; without it Tauri loads the
 dev URL, whatever the profile says. The Tauri CLI turns it on for `tauri build`
