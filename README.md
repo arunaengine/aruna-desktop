@@ -254,6 +254,17 @@ executable, then the resource directory. Without a synced node the build still
 succeeds: `build.rs` writes a placeholder in the sidecar's place, and the app
 reports `run scripts/sync-node.sh` instead of running it.
 
+## Releases
+
+`.github/workflows/release.yml` builds one installer per platform, each with
+the app, the node and the portal inside: `.deb`, `.rpm` and `.AppImage` for
+Linux, `.msi` and an NSIS `.exe` for Windows, and a `.dmg` for Apple silicon
+and Intel Macs. It checks out `arunaengine/aruna` and `arunaengine/website` at
+the refs it is given (`main` by default), builds the node for the target,
+installs it and the portal through the two sync scripts, and runs
+`tauri build`. A `v*` tag publishes the bundles as a GitHub release; a manual
+run only uploads them as workflow artifacts.
+
 ## The portal artifact
 
 `ui/` holds the portal build the window serves. It is gitignored, and it is the
