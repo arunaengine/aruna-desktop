@@ -117,7 +117,7 @@ reports as a missing bridge half rather than a failed call.
 | `pick_directory` | `{title?, startPath?}` | the chosen path, or `null` |
 | `reveal_path` | `{path}` | – |
 | `open_external` | `{url}` | – |
-| `validate_realm` | `{input}` | `{origin, realm, apiVersion, portal}` |
+| `validate_realm` | `{input}` | `{origin, realm, apiVersion, portal, redirectedFrom}` |
 | `enroll_invite_last` | – | the uncollected `enroll-invite` payload, or `null` |
 
 Notes on the ones that do more than they say:
@@ -168,7 +168,11 @@ Notes on the ones that do more than they say:
   device's synced folders.
 * `validate_realm` checks the address, **remembers it** as this device's realm
   and answers with the origin. Remembering is the point: it is what the portal
-  talks to until a node of this device's own is serving. An **enrolled** device
+  talks to until a node of this device's own is serving. Only a management node
+  enrolls a device or signs it in, so an address answered by any other kind is
+  **followed**: the node's `/info/realm` names the realm's management nodes and
+  the first one that answers is remembered instead, with the typed address in
+  `redirectedFrom`. A node that names none reachable is kept as typed. An **enrolled** device
   refuses it outright with `wipe this device before joining another realm`: its
   node, its keys and its data belong to the realm it joined. A wipe keeps the
   remembered realm, so the owner still has one to sign in to afterwards, and it

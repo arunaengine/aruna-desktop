@@ -25,6 +25,9 @@ pub struct RealmTarget {
     pub realm: Option<String>,
     pub api_version: Option<String>,
     pub portal: bool,
+    /// The address the owner typed, once the shell followed it to one of the
+    /// management nodes that address named.
+    pub redirected_from: Option<String>,
 }
 
 /// Why a realm address cannot be used, in terms the owner can act on.
@@ -100,9 +103,74 @@ pub fn normalize(input: &str) -> Result<String, DesktopError> {
     Ok(url.origin().ascii_serialization())
 }
 
+/// Asks an origin whether it serves a realm, then follows any other node kind
+/// to a management node: only that kind enrolls a device or signs it in.
+pub async fn check(client: &reqwest::Client, origin: &str) -> Result<RealmTarget, Reach> {
+    let target = reach(client, origin).await?;
+    Ok(follow(client, target).await)
+}
+
+/// Every management node the realm published, from a node's `/info/realm`;
+/// `None` when the node is one itself or names none.
+fn management_urls(realm: &Value) -> Option<Vec<String>> {
+    if realm.get("is_management_node").and_then(Value::as_bool) == Some(true) {
+        return None;
+    }
+    let urls: Vec<String> = realm
+        .get("management_urls")?
+        .as_array()?
+        .iter()
+        .filter_map(Value::as_str)
+        .map(str::to_string)
+        .collect();
+    (!urls.is_empty()).then_some(urls)
+}
+
+/// The first management node that answers replaces the target; a realm that
+/// names none reachable keeps the node the owner typed, and the portal explains.
+async fn follow(client: &reqwest::Client, target: RealmTarget) -> RealmTarget {
+    let realm = format!("{}/info/realm", target.api_base_url);
+    let Some(urls) = get_json(client, &realm)
+        .await
+        .ok()
+        .as_ref()
+        .and_then(management_urls)
+    else {
+        return target;
+    };
+    for url in urls {
+        let Ok(origin) = normalize(&url) else {
+            continue;
+        };
+        if origin == target.origin {
+            continue;
+        }
+        let found = match reach(client, &origin).await {
+            Ok(found) => found,
+            Err(_) => match reach_api(client, &url).await {
+                Ok(found) => found,
+                Err(_) => continue,
+            },
+        };
+        return RealmTarget {
+            redirected_from: Some(target.origin),
+            ..found
+        };
+    }
+    target
+}
+
+/// A published api base that does not sit at the root of its origin.
+async fn reach_api(client: &reqwest::Client, url: &str) -> Result<RealmTarget, Reach> {
+    let api = url.trim_end_matches('/');
+    let origin = normalize(api).map_err(|_| Reach::NotAruna)?;
+    let info = get_json(client, &format!("{api}/info")).await?;
+    target(&origin, api, &info, false).ok_or(Reach::NotAruna)
+}
+
 /// Asks an origin whether it serves a realm: the portal's runtime config first,
 /// then the two places a node's `/info` route can sit.
-pub async fn check(client: &reqwest::Client, origin: &str) -> Result<RealmTarget, Reach> {
+async fn reach(client: &reqwest::Client, origin: &str) -> Result<RealmTarget, Reach> {
     let config = get_json(client, &format!("{origin}{CONFIG_PATH}")).await;
     if let Err(reach) = &config
         && reach.transport()
@@ -167,6 +235,7 @@ fn target(origin: &str, api_base: &str, info: &Value, portal: bool) -> Option<Re
             .and_then(Value::as_str)
             .map(str::to_string),
         portal,
+        redirected_from: None,
     })
 }
 
@@ -249,6 +318,33 @@ mod tests {
             origin("https://aruna.example:8443/"),
             "https://aruna.example:8443"
         );
+    }
+
+    #[test]
+    fn names_management_nodes() {
+        // A management node is never followed; any other kind is, to every
+        // url it names, and a node that names none keeps the owner's address.
+        let server = json!({
+            "is_management_node": false,
+            "management_urls": ["https://a.example/api/v1", "https://b.example/api/v1"]
+        });
+        assert_eq!(
+            management_urls(&server).as_deref(),
+            Some(
+                &[
+                    "https://a.example/api/v1".to_string(),
+                    "https://b.example/api/v1".to_string()
+                ][..]
+            )
+        );
+        let management =
+            json!({ "is_management_node": true, "management_urls": ["https://a.example/api/v1"] });
+        assert_eq!(management_urls(&management), None);
+        assert_eq!(
+            management_urls(&json!({ "is_management_node": false, "management_urls": [] })),
+            None
+        );
+        assert_eq!(management_urls(&json!({ "realm_id": "r" })), None);
     }
 
     #[test]
