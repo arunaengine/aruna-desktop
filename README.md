@@ -9,6 +9,12 @@ root, with no fork and no desktop variant. What makes it a desktop app is what
 the shell injects before the portal's first script runs, the commands it answers
 afterwards, and the events it sends when what it injected has moved.
 
+Closing that window closes the app, and the node goes down with it deliberately:
+the close is held back, the supervisor stops the node the way its own shutdown
+expects, and the app exits once that is done. Closing it again while the stop is
+running changes nothing. [`app_quit`](#commands) is the same path, for a portal
+that has a quit of its own to offer.
+
 ```
 window  ->  the portal artifact in ui/        (one build, web and desktop)
 shell   ->  window.__ARUNA_DESKTOP__          (api base, features, bridge)
@@ -51,12 +57,12 @@ hosted portal.
   "apiBaseUrl": "http://127.0.0.1:34116/api/v1",
   "authCallbackOrigin": "http://127.0.0.1:34115", // only with a local portal
   "features": { "desktop": true, "systemBrowserAuth": false, "embeddedAuth": true },
-  "bridge": { "invoke": "…", "version": 4 }
+  "bridge": { "invoke": "…", "version": 5 }
 }
 ```
 
 `version` is the command set below. A shell that answers fewer commands must not
-claim version 4.
+claim version 5.
 
 ### Which API the portal talks to
 
@@ -100,14 +106,14 @@ accepts.
 
 ## Commands
 
-Contract version 4. Arguments are a single object; answers are JSON. A name the
+Contract version 5. Arguments are a single object; answers are JSON. A name the
 shell does not implement is rejected with `unknown command: …`, which the portal
 reports as a missing bridge half rather than a failed call.
 
 | Command | Arguments | Answers |
 | --- | --- | --- |
 | `shell_context` | – | `{revision, apiBaseUrl, authCallbackOrigin?, realmUrl?, features}` |
-| `node_status` | – | `{state, ready, nodeId, realm, enrolled, apiBaseUrl, version, uptimeSeconds, message}` |
+| `node_status` | – | `{state, ready, nodeId, realm, enrolled, enrolling, apiBaseUrl, version, uptimeSeconds, message}` |
 | `node_logs_tail` | `{lines}` | the last lines of the node's output, oldest first |
 | `node_settings_get` | – | `{storagePath, compute, paused, autoStart}` |
 | `node_settings_set` | `{settings}` (any subset) | the stored settings |
@@ -120,6 +126,7 @@ reports as a missing bridge half rather than a failed call.
 | `auth_open` | `{url}` | – |
 | `validate_realm` | `{input}` | `{origin, realm, apiVersion, portal, redirectedFrom}` |
 | `enroll_invite_last` | – | the uncollected `enroll-invite` payload, or `null` |
+| `app_quit` | – | – |
 
 Notes on the ones that do more than they say:
 
@@ -134,9 +141,11 @@ Notes on the ones that do more than they say:
   running, so it is never an address that would refuse the call.
 * `node_status` is also where a running enrollment is observed: it probes the
   node, advances the join, and spends the one-time secret once the node serves
-  the realm. `nodeId` stays `null`; a node reports its own id only to a caller
-  holding a realm token, which the shell never has, so the portal reads it with
-  the owner's own.
+  the realm. `enrolling` is that join while it lasts: a secret is armed and the
+  realm has not listed this device yet, so it turns off in the same answer
+  `enrolled` turns on. `nodeId` stays `null`; a node reports its own id only to
+  a caller holding a realm token, which the shell never has, so the portal reads
+  it with the owner's own.
 * `node_settings_set` stops the node when `paused` turns on and starts it when
   it turns off. `storagePath` and `compute` are read once at startup, so
   changing either **restarts** a node that is up; everything else reaches the
@@ -188,6 +197,11 @@ Notes on the ones that do more than they say:
   is how a portal that subscribed after a cold-start link still sees it, so it
   serves that payload **once**: collecting it clears it, and a later visit gets
   `null` rather than replaying an old outcome. A wipe clears it too.
+* `app_quit` ends the app, and stops the node first: `SIGTERM`, then the node's
+  own shutdown grace, then a kill. It is the same path closing the window takes,
+  and the portal's only way to close a window it does not own. Whichever comes
+  first owns the shutdown; a second one waits for it rather than stopping the
+  node again.
 
 ## Events
 

@@ -25,7 +25,7 @@ use crate::windows;
 
 /// Every command this shell answers. A name that is not here is rejected as
 /// unknown, which the portal reads as a bridge missing that half.
-pub const KNOWN: [&str; 14] = [
+pub const KNOWN: [&str; 15] = [
     "shell_context",
     "node_status",
     "node_logs_tail",
@@ -40,6 +40,7 @@ pub const KNOWN: [&str; 14] = [
     "auth_open",
     "validate_realm",
     "enroll_invite_last",
+    "app_quit",
 ];
 
 /// The phrase `wipe_device` demands back before it destroys anything. The
@@ -82,6 +83,9 @@ pub struct DeviceStatus {
     pub node_id: Option<String>,
     pub realm: Option<String>,
     pub enrolled: bool,
+    /// Whether a join is under way: a secret is armed and the realm has not
+    /// listed this device yet.
+    pub enrolling: bool,
     pub api_base_url: Option<String>,
     pub version: Option<String>,
     pub uptime_seconds: Option<u64>,
@@ -127,6 +131,7 @@ pub async fn node_status(
         node_id: None,
         realm: info.realm.or(settings.realm.clone()),
         enrolled: settings.enrolled,
+        enrolling: enrolling(&settings),
         // A spawned node has bound nothing yet, so naming its base would be an
         // address that refuses the call.
         api_base_url: node.ready.then(|| api_base(&settings)),
@@ -306,6 +311,12 @@ pub async fn validate_realm(
     Ok(target)
 }
 
+/// Whether a join is running: the secret is spent the moment the realm lists
+/// this device, so an armed one that has not joined is one in flight.
+fn enrolling(settings: &NodeSettings) -> bool {
+    settings.onboarding_secret.is_some() && !settings.enrolled
+}
+
 /// Whether this device may still be pointed at a realm. A device that joined
 /// one belongs to it: its node, its keys and its data are that realm's, so
 /// another realm is a wipe away rather than a setting.
@@ -394,6 +405,14 @@ pub fn auth_open(app: AppHandle, url: String) -> Result<(), DesktopError> {
     let target = url::Url::parse(&web_url(&url)?)
         .map_err(|error| DesktopError::Link(format!("unreadable URL: {error}")))?;
     windows::open_login(&app, target)?;
+    Ok(())
+}
+
+/// Ends the app, stopping the node first: the portal owns no window and the
+/// node's own shutdown is what keeps its data whole.
+#[tauri::command]
+pub async fn app_quit(app: AppHandle) -> Result<(), DesktopError> {
+    windows::quit(app).await;
     Ok(())
 }
 
@@ -615,6 +634,20 @@ mod tests {
         settings.wipe();
         assert!(may_join(&settings).is_ok());
         assert_eq!(settings.realm_url.as_deref(), Some("https://aruna.example"));
+    }
+
+    #[test]
+    fn reports_a_running_join() {
+        // The armed secret is the join: it is spent the moment the realm lists
+        // this device.
+        let mut settings = NodeSettings::default();
+        assert!(!enrolling(&settings));
+
+        settings.enroll("secret".into(), Some("https://seed.example".into()), None);
+        assert!(enrolling(&settings));
+
+        settings.joined(Some("r-1".into()));
+        assert!(!enrolling(&settings));
     }
 
     #[test]

@@ -47,7 +47,7 @@ pub struct EnrollInvite {
 
 /// Keeps the last invitation the app acted on until someone collects it. A link
 /// followed into a cold start emits its event before the portal is listening,
-/// so the payload waits here — and is handed over exactly once, because a
+/// so the payload waits here, and is handed over exactly once, because a
 /// second reading of the same outcome is stale news, not a missed event.
 #[derive(Debug, Default)]
 pub struct LastInvite(std::sync::Mutex<Option<EnrollInvite>>);

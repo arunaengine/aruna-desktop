@@ -57,6 +57,7 @@ pub fn run() {
             bridge::auth_open,
             bridge::validate_realm,
             bridge::enroll_invite_last,
+            bridge::app_quit,
         ]);
     let handler = move |invoke: tauri::ipc::Invoke<tauri::Wry>| {
         let command = invoke.message.command();

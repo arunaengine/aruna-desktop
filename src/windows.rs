@@ -9,6 +9,7 @@ use url::Url;
 use crate::deep_link;
 use crate::error::DesktopError;
 use crate::shell::{self, ShellContext};
+use crate::state::AppState;
 
 pub const MAIN_LABEL: &str = "main";
 pub const LOGIN_LABEL: &str = "login";
@@ -40,15 +41,34 @@ pub fn focus_main(app: &AppHandle) {
 /// Opens the app window. The shell context is injected as an initialization
 /// script, which the webview runs before the portal's own scripts.
 pub fn open_main(app: &AppHandle, context: &ShellContext) -> Result<WebviewWindow, DesktopError> {
-    Ok(
-        WebviewWindowBuilder::new(app, MAIN_LABEL, WebviewUrl::App(PathBuf::from(ROOT)))
-            .title("Aruna")
-            .icon(tauri::include_image!("icons/128x128.png"))?
-            .inner_size(1180.0, 820.0)
-            .min_inner_size(820.0, 560.0)
-            .initialization_script(shell::init_script(context))
-            .build()?,
-    )
+    let window = WebviewWindowBuilder::new(app, MAIN_LABEL, WebviewUrl::App(PathBuf::from(ROOT)))
+        .title("Aruna")
+        .icon(tauri::include_image!("icons/128x128.png"))?
+        .inner_size(1180.0, 820.0)
+        .min_inner_size(820.0, 560.0)
+        .initialization_script(shell::init_script(context))
+        .build()?;
+
+    let owner = app.clone();
+    window.on_window_event(move |event| {
+        // Closing the app window ends the app, but the node it supervises gets
+        // its own shutdown first, so the close waits for the stop.
+        if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+            api.prevent_close();
+            tauri::async_runtime::spawn(quit(owner.clone()));
+        }
+    });
+    Ok(window)
+}
+
+/// Stops the node the way its own shutdown expects, then ends the app. The
+/// first caller owns it; a second one leaves that stop to finish.
+pub async fn quit(app: AppHandle) {
+    if !app.state::<AppState>().claim_quit() {
+        return;
+    }
+    app.state::<AppState>().supervisor.stop().await;
+    app.exit(0);
 }
 
 /// Opens the provider's sign-in page in a window of the app's own. The provider

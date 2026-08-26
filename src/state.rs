@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use tauri::{AppHandle, Manager};
@@ -22,6 +23,9 @@ pub struct AppState {
     /// What the portal was last told to talk to: injected at boot, emitted as
     /// `context-changed` afterwards, and answered by `shell_context`.
     pub shell: Mutex<ShellContext>,
+    /// Set once a quit owns the shutdown, so a second one does not stop the
+    /// node again while the first is still waiting for it.
+    quitting: AtomicBool,
 }
 
 impl AppState {
@@ -57,7 +61,14 @@ impl AppState {
             enroll: Mutex::new(tracker),
             invite: LastInvite::default(),
             shell: Mutex::new(context),
+            quitting: AtomicBool::new(false),
         })
+    }
+
+    /// Whether this caller owns the shutdown. Only the first one does; a later
+    /// close request leaves the stop that is already running to finish.
+    pub fn claim_quit(&self) -> bool {
+        !self.quitting.swap(true, Ordering::SeqCst)
     }
 
     pub fn settings(&self) -> NodeSettings {
