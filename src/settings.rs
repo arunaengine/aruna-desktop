@@ -109,13 +109,14 @@ impl ComputeSettings {
 }
 
 /// The local control surface the portal renders: where the node stores data,
-/// what it may compute and whether it runs. Everything else the desktop keeps
-/// is machine configuration the owner never has to see.
+/// what it may compute, whether it serves S3 and whether it runs. Everything
+/// else the desktop keeps is machine configuration the owner never has to see.
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct LocalSettings {
     pub storage_path: String,
     pub compute: ComputeSettings,
+    pub s3_enabled: bool,
     pub paused: bool,
     pub auto_start: bool,
 }
@@ -127,6 +128,7 @@ pub struct LocalSettings {
 pub struct SettingsPatch {
     pub storage_path: Option<String>,
     pub compute: Option<ComputeSettings>,
+    pub s3_enabled: Option<bool>,
     pub paused: Option<bool>,
     pub auto_start: Option<bool>,
 }
@@ -247,6 +249,7 @@ impl NodeSettings {
         LocalSettings {
             storage_path: self.storage_dir(data_dir).display().to_string(),
             compute: self.compute,
+            s3_enabled: self.s3_enabled,
             paused: self.paused,
             auto_start: self.auto_start,
         }
@@ -264,6 +267,9 @@ impl NodeSettings {
         }
         if let Some(compute) = patch.compute {
             self.compute = compute;
+        }
+        if let Some(enabled) = patch.s3_enabled {
+            self.s3_enabled = enabled;
         }
         if let Some(paused) = patch.paused {
             self.paused = paused;
@@ -656,7 +662,24 @@ mod tests {
             .expect("a usable patch");
         assert!(settings.paused);
         assert!(settings.auto_start);
+        assert!(settings.s3_enabled);
         assert!(settings.storage_path.is_none());
+    }
+
+    #[test]
+    fn toggles_local_s3() {
+        // The panel's toggle is the field the env pair is written from.
+        let mut settings = NodeSettings::default();
+        assert!(settings.local(Path::new("/data")).s3_enabled);
+
+        settings
+            .apply(SettingsPatch {
+                s3_enabled: Some(false),
+                ..SettingsPatch::default()
+            })
+            .expect("a usable patch");
+        assert!(!settings.local(Path::new("/data")).s3_enabled);
+        assert_eq!(pairs(&settings)["S3_HOST"], "");
     }
 
     #[test]

@@ -158,8 +158,8 @@ pub fn node_settings_get(state: State<'_, AppState>) -> LocalSettings {
 }
 
 /// Applies a settings patch and answers with what was stored. Pausing stops the
-/// node and resuming starts it; where it stores data and what it may compute
-/// are read at startup, so changing either restarts a node that is up.
+/// node and resuming starts it; where it stores data, what it may compute and
+/// its S3 listener are read at startup, so changing one restarts a live node.
 #[tauri::command]
 pub async fn node_settings_set(
     app: AppHandle,
@@ -430,10 +430,12 @@ fn web_url(raw: &str) -> Result<String, DesktopError> {
     }
 }
 
-/// Whether the node has to be restarted for a patch to reach it. Both settings
-/// are read once at startup, so a later start would be too late.
+/// Whether the node has to be restarted for a patch to reach it. All three are
+/// read once at startup, so a later start would be too late.
 fn restarts(before: &NodeSettings, after: &NodeSettings) -> bool {
-    before.storage_path != after.storage_path || before.compute != after.compute
+    before.storage_path != after.storage_path
+        || before.compute != after.compute
+        || before.s3_enabled != after.s3_enabled
 }
 
 /// The node's REST base, the same one the portal is told to talk to.
@@ -616,6 +618,10 @@ mod tests {
         computed.compute.max_concurrent = Some(4);
         assert!(restarts(&before, &computed));
 
+        let mut without_s3 = before.clone();
+        without_s3.s3_enabled = !before.s3_enabled;
+        assert!(restarts(&before, &without_s3));
+
         // A pause is not a restart: it stops the node outright.
         let mut paused = before.clone();
         paused.paused = true;
@@ -658,10 +664,12 @@ mod tests {
         // The portal sends whichever fields it changed, in camelCase.
         let patch: SettingsPatch = serde_json::from_value(serde_json::json!({
             "storagePath": "/home/owner/aruna",
+            "s3Enabled": false,
             "paused": true,
         }))
         .expect("the portal's shape");
         assert_eq!(patch.storage_path.as_deref(), Some("/home/owner/aruna"));
+        assert_eq!(patch.s3_enabled, Some(false));
         assert_eq!(patch.paused, Some(true));
         assert!(patch.auto_start.is_none());
     }
