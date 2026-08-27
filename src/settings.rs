@@ -150,8 +150,8 @@ pub struct NodeSettings {
     /// Portal artifact directory; the portal listener stays off while unset.
     pub portal_dir: Option<PathBuf>,
     pub ports: NodePorts,
-    /// Off by default: a device profile serves no S3 listener, which the node
-    /// is told through an empty `S3_HOST` and `S3_ADDRESS` pair.
+    /// On by default: the node serves the owner their own S3 endpoint on
+    /// loopback. Off writes an empty `S3_HOST` and `S3_ADDRESS` pair instead.
     pub s3_enabled: bool,
     pub shutdown_grace_secs: u64,
     /// One-time enrollment secret; consumed by the node on its next start and
@@ -185,7 +185,7 @@ impl Default for NodeSettings {
             device_label: None,
             portal_dir: None,
             ports: NodePorts::default(),
-            s3_enabled: false,
+            s3_enabled: true,
             shutdown_grace_secs: 20,
             onboarding_secret: None,
             seed_url: None,
@@ -539,6 +539,9 @@ mod tests {
         );
         assert_eq!(map["STORAGE_PATH"], "/data/storage");
         assert_eq!(map["PORTAL_MODE"], "disabled");
+        assert_eq!(map["S3_ADDRESS"], "127.0.0.1:34118");
+        assert_eq!(map["S3_HOST"], "127.0.0.1:34118");
+        assert_eq!(map["S3_PUBLIC_URL"], "http://127.0.0.1:34118");
         assert!(!map.contains_key("ONBOARDING_SECRET"));
     }
 
@@ -546,16 +549,13 @@ mod tests {
     fn disables_s3_explicitly() {
         // Both keys must be written empty: half a pair aborts the node, and an
         // omitted key would leave an inherited one in place.
-        let map = pairs(&NodeSettings::default());
+        let map = pairs(&NodeSettings {
+            s3_enabled: false,
+            ..NodeSettings::default()
+        });
         assert_eq!(map["S3_ADDRESS"], "");
         assert_eq!(map["S3_HOST"], "");
         assert!(!map.contains_key("S3_PUBLIC_URL"));
-
-        let enabled = NodeSettings {
-            s3_enabled: true,
-            ..NodeSettings::default()
-        };
-        assert_eq!(pairs(&enabled)["S3_HOST"], "127.0.0.1:34118");
     }
 
     #[test]

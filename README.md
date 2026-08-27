@@ -407,8 +407,8 @@ and a stale shell environment cannot leak in.
 | `PORTAL_MODE` | `artifact` with a portal directory set, otherwise `disabled` |
 | `PORTAL_DIR` | the portal artifact directory (portal mode only) |
 | `PORTAL_SOCKET_ADDRESS` | `127.0.0.1:34115` (portal mode only) |
-| `S3_ADDRESS`, `S3_HOST` | the loopback endpoint while the local S3 listener is on, **empty** while it is off |
-| `S3_PUBLIC_URL` | only while the local S3 endpoint is enabled |
+| `S3_ADDRESS`, `S3_HOST` | `127.0.0.1:34118` by default, **empty** once the owner turns the listener off |
+| `S3_PUBLIC_URL` | `http://127.0.0.1:34118`, while the local S3 endpoint is on |
 | `ONBOARDING_SECRET` | the one-time enrollment secret, consumed on the next start |
 | `ARUNA_COMPUTE_EXECUTOR` | the resolved backend, or `off`; the rest of the profile follows below |
 
@@ -427,10 +427,13 @@ API from whichever one the window happens to have:
 
 Two rows of the env table are the device profile itself:
 
-* an **empty** `S3_HOST` and `S3_ADDRESS` is how the node is told to serve no S3
-  listener. They are written empty rather than omitted, because an omitted key
-  leaves an inherited or `.env`-provided one in place. Setting only one of the
-  pair aborts the node, so they always move together.
+* `S3_HOST` and `S3_ADDRESS` carry the loopback endpoint by default, so the owner
+  has an S3 endpoint of their own on this machine. Turning it off with
+  `"s3Enabled": false` in `<app config>/settings.json` writes both **empty**,
+  which is how the node is told to serve no S3 listener. They are written empty
+  rather than omitted, because an omitted key leaves an inherited or
+  `.env`-provided one in place. Setting only one of the pair aborts the node, so
+  they always move together.
 * `PORTAL_MODE` is written as `disabled` when no portal directory is set. It is
   never written empty: aruna accepts only `artifact` and `disabled`.
 
@@ -449,7 +452,7 @@ the environment the app was launched from cannot configure the node's compute.
 | --- | --- |
 | `ARUNA_COMPUTE_EXECUTOR` | `docker` or `apptainer`, the resolved backend, or `off` |
 | `ARUNA_COMPUTE_OPTIONAL` | `1`; a missing daemon leaves the node up without compute |
-| `ARUNA_COMPUTE_LOCAL_ONLY` | `1`; the device profile has no S3 listener to hand a container |
+| `ARUNA_COMPUTE_LOCAL_ONLY` | `1`; the device's S3 listener is loopback-only, so there is none to hand a container |
 | `ARUNA_COMPUTE_MAX_CONCURRENT` | the owner's concurrent-run ceiling, `1` by default; omitted when they unset it |
 | `ARUNA_COMPUTE_MAX_CPU_CORES`, `ARUNA_COMPUTE_MAX_RAM_BYTES`, `ARUNA_COMPUTE_MAX_DISK_BYTES` | each written only while the owner set it; unset means no ceiling |
 | `ARUNA_COMPUTE_KEEP_FAILED` | `1` while the owner keeps failed jobs for inspection |
