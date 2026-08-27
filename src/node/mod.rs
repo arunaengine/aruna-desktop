@@ -31,6 +31,10 @@ const RESTART_BACKOFF: Duration = Duration::from_secs(2);
 /// while, so this waits for as long as the child lives.
 const READY_POLL: Duration = Duration::from_millis(500);
 
+/// How often a serving node is asked again. A node that stops answering must be
+/// reported as down rather than stay online for the rest of the run.
+const SERVING_POLL: Duration = Duration::from_secs(3);
+
 #[derive(Clone, Copy, Debug, Default, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum NodeState {
@@ -313,45 +317,55 @@ impl Supervisor {
     }
 
     /// Waits for the child to exit or a stop to arrive, asking the node whether
-    /// it serves yet in the meantime. `None` means the stop won.
+    /// it serves in the meantime. `None` means the stop won.
     async fn watch(
         &self,
         child: &mut Child,
         stop: &mut oneshot::Receiver<()>,
         ops: u16,
     ) -> Option<std::io::Result<ExitStatus>> {
-        let serving = self.await_ready(ops);
-        tokio::pin!(serving);
-        let mut waiting = true;
+        // Only a readiness change continues the loop, so the arms it recreates
+        // lose no progress.
+        let mut serving = false;
         loop {
             tokio::select! {
                 exit = child.wait() => return Some(exit),
                 _ = &mut *stop => return None,
-                () = &mut serving, if waiting => {
-                    waiting = false;
-                    self.mark_ready();
+                () = self.await_flip(ops, serving) => {
+                    serving = !serving;
+                    if serving {
+                        self.mark_ready();
+                    } else {
+                        self.mark_unready();
+                    }
                 }
             }
         }
     }
 
-    /// Answers once the node's readiness endpoint does. A join can take a while
-    /// and has no deadline of ours: the child exiting ends the wait.
-    async fn await_ready(&self, ops: u16) {
-        while !ready(&self.http, ops).await {
-            tokio::time::sleep(READY_POLL).await;
+    /// Answers once the node's readiness endpoint disagrees with `serving`. A
+    /// join can take a while and has no deadline of ours: the child exiting ends
+    /// the wait, and a node that serves is asked again for as long as it lives.
+    async fn await_flip(&self, ops: u16, serving: bool) {
+        let period = if serving { SERVING_POLL } else { READY_POLL };
+        while ready(&self.http, ops).await == serving {
+            tokio::time::sleep(period).await;
         }
     }
 
     /// Republishes the current run as serving, which is what the shell context
     /// and the portal's device view switch on.
     fn mark_ready(&self) {
-        let status = self.status();
-        if status.state == NodeState::Running && !status.ready {
-            self.publish(NodeStatus {
-                ready: true,
-                ..status
-            });
+        if let Some(status) = transition(&self.status(), true) {
+            self.publish(status);
+        }
+    }
+
+    /// Republishes a run whose node stopped answering, which takes the portal
+    /// back to the realm.
+    fn mark_unready(&self) {
+        if let Some(status) = transition(&self.status(), false) {
+            self.publish(status);
         }
     }
 
@@ -465,6 +479,15 @@ fn flips(before: &NodeStatus, after: &NodeStatus) -> bool {
     before.ready != after.ready
 }
 
+/// What a readiness answer republishes, or `None` when it changes nothing: a
+/// re-check runs while the node lives, and only a change is news.
+fn transition(status: &NodeStatus, ready: bool) -> Option<NodeStatus> {
+    (status.state == NodeState::Running && status.ready != ready).then(|| NodeStatus {
+        ready,
+        ..status.clone()
+    })
+}
+
 fn describe_exit(code: Option<i32>) -> String {
     match code {
         Some(code) => format!("code {code}"),
@@ -521,5 +544,33 @@ mod tests {
         assert!(!flips(&spawned, &status(NodeState::Restarting, false)));
         assert!(!flips(&status(NodeState::Starting, false), &spawned));
         assert!(!flips(&serving, &serving.clone()));
+        // A running node that stops answering takes the portal back as well.
+        assert!(flips(&serving, &spawned));
+    }
+
+    #[test]
+    fn drops_ready() {
+        // The re-check publishes both ways, and a run on its way out is left
+        // alone: its own state was already published.
+        let spawned = status(NodeState::Running, false);
+        let serving = status(NodeState::Running, true);
+        let raised = transition(&spawned, true).expect("a node that started serving");
+        assert!(raised.ready);
+        assert!(flips(&spawned, &raised));
+
+        let dropped = transition(&serving, false).expect("a node that stopped answering");
+        assert!(!dropped.ready);
+        assert_eq!(dropped.state, NodeState::Running);
+        assert!(flips(&serving, &dropped));
+
+        assert!(transition(&status(NodeState::Stopping, true), false).is_none());
+        assert!(transition(&status(NodeState::Starting, false), true).is_none());
+    }
+
+    #[test]
+    fn holds_ready() {
+        // A tick that agrees with the published run emits nothing.
+        assert!(transition(&status(NodeState::Running, true), true).is_none());
+        assert!(transition(&status(NodeState::Running, false), false).is_none());
     }
 }
