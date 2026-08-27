@@ -118,7 +118,6 @@ pub struct LocalSettings {
     pub compute: ComputeSettings,
     pub s3_enabled: bool,
     pub paused: bool,
-    pub auto_start: bool,
 }
 
 /// A partial edit of [`LocalSettings`]; the portal may send any subset.
@@ -130,7 +129,6 @@ pub struct SettingsPatch {
     pub compute: Option<ComputeSettings>,
     pub s3_enabled: Option<bool>,
     pub paused: Option<bool>,
-    pub auto_start: Option<bool>,
 }
 
 /// Everything the desktop needs to launch and reach its node. Serialized as the
@@ -172,7 +170,6 @@ pub struct NodeSettings {
     pub realm_api_url: Option<String>,
     /// Set once the realm has listed this node.
     pub enrolled: bool,
-    pub auto_start: bool,
     /// Escape hatch for node keys the desktop does not model yet.
     pub extra_env: BTreeMap<String, String>,
 }
@@ -195,7 +192,6 @@ impl Default for NodeSettings {
             realm_url: None,
             realm_api_url: None,
             enrolled: false,
-            auto_start: false,
             extra_env: BTreeMap::new(),
         }
     }
@@ -243,6 +239,11 @@ impl NodeSettings {
         self.compute.validate()
     }
 
+    /// An enrolled device (or one mid-enrollment) runs its node with the app.
+    pub fn starts_on_launch(&self) -> bool {
+        (self.enrolled || self.onboarding_secret.is_some()) && !self.paused
+    }
+
     /// What the portal's local panel shows. The storage path is the effective
     /// one, so an unset default is still a path the owner can see and change.
     pub fn local(&self, data_dir: &Path) -> LocalSettings {
@@ -251,7 +252,6 @@ impl NodeSettings {
             compute: self.compute,
             s3_enabled: self.s3_enabled,
             paused: self.paused,
-            auto_start: self.auto_start,
         }
     }
 
@@ -273,9 +273,6 @@ impl NodeSettings {
         }
         if let Some(paused) = patch.paused {
             self.paused = paused;
-        }
-        if let Some(auto_start) = patch.auto_start {
-            self.auto_start = auto_start;
         }
         Ok(())
     }
@@ -638,22 +635,17 @@ mod tests {
 
     #[test]
     fn ignores_dropped_fields() {
-        // A settings file written before synced folders moved into the node
-        // still loads: offered directories are simply not read any more.
+        // Old autoStart and offered directory fields are ignored.
         let stored: NodeSettings = serde_json::from_str(
             r#"{"offeredDirectories":["/home/o/data"],"autoStart":true,"paused":true}"#,
         )
         .expect("an older settings file");
-        assert!(stored.auto_start);
         assert!(stored.paused);
     }
 
     #[test]
     fn applies_partial_edits() {
-        let mut settings = NodeSettings {
-            auto_start: true,
-            ..NodeSettings::default()
-        };
+        let mut settings = NodeSettings::default();
         settings
             .apply(SettingsPatch {
                 paused: Some(true),
@@ -661,9 +653,27 @@ mod tests {
             })
             .expect("a usable patch");
         assert!(settings.paused);
-        assert!(settings.auto_start);
         assert!(settings.s3_enabled);
         assert!(settings.storage_path.is_none());
+    }
+
+    #[test]
+    fn starts_enrolled_node() {
+        let mut settings = NodeSettings::default();
+        assert!(!settings.starts_on_launch());
+
+        settings.enrolled = true;
+        assert!(settings.starts_on_launch());
+
+        // An armed secret covers the interval before enrollment completes.
+        settings.enrolled = false;
+        settings.onboarding_secret = Some("secret".into());
+        assert!(settings.starts_on_launch());
+
+        settings.onboarding_secret = None;
+        settings.enrolled = true;
+        settings.paused = true;
+        assert!(!settings.starts_on_launch());
     }
 
     #[test]

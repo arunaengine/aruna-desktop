@@ -671,6 +671,5 @@ mod tests {
         assert_eq!(patch.storage_path.as_deref(), Some("/home/owner/aruna"));
         assert_eq!(patch.s3_enabled, Some(false));
         assert_eq!(patch.paused, Some(true));
-        assert!(patch.auto_start.is_none());
     }
 }

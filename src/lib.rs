@@ -78,7 +78,6 @@ pub fn run() {
             let handle = app.handle().clone();
             let state = AppState::build(&handle)?;
             let settings = state.settings();
-            let auto_start = settings.auto_start && !settings.paused;
             let context = state.shell.lock().expect("shell poisoned").clone();
             app.manage(state);
             windows::open_main(&handle, &context)?;
@@ -97,7 +96,9 @@ pub fn run() {
                 }
             });
 
-            if auto_start && let Err(error) = handle.state::<AppState>().supervisor.start() {
+            if settings.starts_on_launch()
+                && let Err(error) = handle.state::<AppState>().supervisor.start()
+            {
                 tracing::warn!(%error, "Could not start the node");
             }
             Ok(())
