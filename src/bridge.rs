@@ -124,17 +124,20 @@ pub async fn node_status(
 
     shell::sync(&app);
     let settings = state.settings();
+    // The probe this call just took outranks the supervisor's last one; without
+    // one the node is not running, so its published readiness is all there is.
+    let ready = seen.as_ref().map_or(node.ready, |seen| seen.ready);
     let info = seen.map(|seen| seen.info).unwrap_or_default();
     Ok(DeviceStatus {
         state: node.state.into(),
-        ready: node.ready,
+        ready,
         node_id: None,
         realm: info.realm.or(settings.realm.clone()),
         enrolled: settings.enrolled,
         enrolling: enrolling(&settings),
         // A spawned node has bound nothing yet, so naming its base would be an
         // address that refuses the call.
-        api_base_url: node.ready.then(|| api_base(&settings)),
+        api_base_url: ready.then(|| api_base(&settings)),
         version: info.version,
         uptime_seconds: state.supervisor.uptime(),
         message: joining
