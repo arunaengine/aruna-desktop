@@ -57,12 +57,12 @@ hosted portal.
   "apiBaseUrl": "http://127.0.0.1:34116/api/v1",
   "authCallbackOrigin": "http://127.0.0.1:34115", // only with a local portal
   "features": { "desktop": true, "systemBrowserAuth": false, "embeddedAuth": true },
-  "bridge": { "invoke": "…", "version": 5 }
+  "bridge": { "invoke": "…", "version": 6 }
 }
 ```
 
 `version` is the command set below. A shell that answers fewer commands must not
-claim version 5.
+claim version 6.
 
 ### Which API the portal talks to
 
@@ -106,7 +106,7 @@ accepts.
 
 ## Commands
 
-Contract version 5. Arguments are a single object; answers are JSON. A name the
+Contract version 6. Arguments are a single object; answers are JSON. A name the
 shell does not implement is rejected with `unknown command: …`, which the portal
 reports as a missing bridge half rather than a failed call.
 

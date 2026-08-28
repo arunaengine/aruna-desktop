@@ -96,10 +96,13 @@ pub fn run() {
                 }
             });
 
-            if settings.starts_on_launch()
-                && let Err(error) = handle.state::<AppState>().supervisor.start()
-            {
-                tracing::warn!(%error, "Could not start the node");
+            if settings.starts_on_launch() {
+                tauri::async_runtime::spawn(async move {
+                    let state = handle.state::<AppState>();
+                    if let Err(error) = bridge::start_node(&state).await {
+                        tracing::warn!(%error, "Could not start the node");
+                    }
+                });
             }
             Ok(())
         })

@@ -48,6 +48,14 @@ pub enum NodeState {
     BinaryMissing,
 }
 
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RealmMismatch {
+    pub expected: String,
+    pub actual: String,
+    pub realm_url: String,
+}
+
 #[derive(Clone, Debug, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NodeStatus {
@@ -58,6 +66,7 @@ pub struct NodeStatus {
     pub pid: Option<u32>,
     pub binary: Option<String>,
     pub detail: Option<String>,
+    pub realm_mismatch: Option<RealmMismatch>,
     pub restarts: u32,
     pub last_exit: Option<i32>,
 }
@@ -116,6 +125,30 @@ impl Supervisor {
             .expect("supervisor poisoned")
             .status
             .clone()
+    }
+
+    pub fn record_realm_mismatch(&self, mismatch: RealmMismatch) -> NodeStatus {
+        let detail = format!(
+            "the realm at {} was recreated (id {}); this device was enrolled in {}. Wipe this device and set it up again.",
+            mismatch.realm_url, mismatch.actual, mismatch.expected
+        );
+        let status = NodeStatus {
+            state: NodeState::Stopped,
+            detail: Some(detail),
+            realm_mismatch: Some(mismatch),
+            ..NodeStatus::default()
+        };
+        let mut inner = self.inner.lock().expect("supervisor poisoned");
+        if inner.task.is_some() || inner.stop.is_some() {
+            return inner.status.clone();
+        }
+        inner.started = None;
+        inner.status = status.clone();
+        drop(inner);
+        if let Err(error) = self.app.emit(STATUS_EVENT, status.clone()) {
+            tracing::warn!(%error, "Could not emit the node status");
+        }
+        status
     }
 
     /// Starts the run loop, which probes this machine and writes the node's env
@@ -521,6 +554,7 @@ fn signal_term(_pid: u32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     fn status(state: NodeState, ready: bool) -> NodeStatus {
         NodeStatus {
@@ -572,5 +606,27 @@ mod tests {
         // A tick that agrees with the published run emits nothing.
         assert!(transition(&status(NodeState::Running, true), true).is_none());
         assert!(transition(&status(NodeState::Running, false), false).is_none());
+    }
+
+    #[test]
+    fn names_realm_mismatch_fields() {
+        let status = NodeStatus {
+            realm_mismatch: Some(RealmMismatch {
+                expected: "realm-old".into(),
+                actual: "realm-new".into(),
+                realm_url: "https://aruna.example".into(),
+            }),
+            ..NodeStatus::default()
+        };
+        let value = serde_json::to_value(status).expect("a serializable status");
+        assert_eq!(
+            value.get("realmMismatch"),
+            Some(&json!({
+                "expected": "realm-old",
+                "actual": "realm-new",
+                "realmUrl": "https://aruna.example"
+            }))
+        );
+        assert!(value.get("realm_mismatch").is_none());
     }
 }

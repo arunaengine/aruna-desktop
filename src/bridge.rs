@@ -5,6 +5,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use serde::Serialize;
 use tauri::{AppHandle, Manager, State};
@@ -16,7 +17,7 @@ use crate::deep_link::{EnrollInvite, EnrollLink};
 use crate::enroll::{EnrollPhase, Observed};
 use crate::error::DesktopError;
 use crate::node::compute::ComputeProbe;
-use crate::node::{self, NodeInfo, NodeState, NodeStatus};
+use crate::node::{self, NodeInfo, NodeState, NodeStatus, RealmMismatch};
 use crate::realm::{self, RealmTarget};
 use crate::settings::{LocalSettings, NodeSettings, SettingsPatch};
 use crate::shell::{self, ShellContext};
@@ -46,6 +47,7 @@ pub const KNOWN: [&str; 15] = [
 /// The phrase `wipe_device` demands back before it destroys anything. The
 /// portal asks for it too; the shell never trusts that it did.
 const WIPE_PHRASE: &str = "wipe";
+const REALM_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// The supervisor's state in the four the portal renders. `Stopping` counts as
 /// stopped and `Restarting` as starting: both are on their way to that state.
@@ -189,11 +191,12 @@ pub async fn node_settings_set(
         }
         // A device with no node binary stays a usable app, so a failed resume
         // is left in the status rather than refusing the setting.
-        Some(false) => {
-            if let Err(error) = state.supervisor.start() {
+        Some(false) if !live => {
+            if let Err(error) = start_node(&state).await {
                 tracing::warn!(%error, "Could not resume the node");
             }
         }
+        Some(false) => {}
         None => {}
     }
     shell::sync(&app);
@@ -443,6 +446,30 @@ pub fn api_base(settings: &NodeSettings) -> String {
     format!("{}/api/v1", settings.api_url())
 }
 
+pub(crate) async fn start_node(state: &AppState) -> Result<NodeStatus, DesktopError> {
+    let settings = state.settings();
+    if settings.enrolled
+        && let Some(realm_url) = settings.realm_url.as_deref()
+        && let Ok(Ok(target)) =
+            tokio::time::timeout(REALM_PROBE_TIMEOUT, realm::check(&state.http, realm_url)).await
+        && let Some((expected, actual)) =
+            realm_mismatch(settings.realm.as_deref(), target.realm.as_deref())
+    {
+        return Ok(state.supervisor.record_realm_mismatch(RealmMismatch {
+            expected,
+            actual,
+            realm_url: realm_url.to_string(),
+        }));
+    }
+    state.supervisor.start()
+}
+
+fn realm_mismatch(settings_realm: Option<&str>, probed: Option<&str>) -> Option<(String, String)> {
+    let expected = settings_realm?;
+    let actual = probed?;
+    (expected != actual).then(|| (expected.to_string(), actual.to_string()))
+}
+
 /// One round of what a running node says about itself.
 struct Seen {
     ready: bool,
@@ -568,6 +595,21 @@ mod tests {
             api_base(&NodeSettings::default()),
             "http://127.0.0.1:34116/api/v1"
         );
+    }
+
+    #[test]
+    fn detects_recreated_realm() {
+        assert_eq!(
+            realm_mismatch(Some("realm-old"), Some("realm-new")),
+            Some(("realm-old".into(), "realm-new".into()))
+        );
+        assert_eq!(realm_mismatch(Some("realm-old"), Some("realm-old")), None);
+    }
+
+    #[test]
+    fn ignores_unknown_realm_ids() {
+        assert_eq!(realm_mismatch(None, Some("realm-new")), None);
+        assert_eq!(realm_mismatch(Some("realm-old"), None), None);
     }
 
     #[test]
