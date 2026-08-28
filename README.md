@@ -14,6 +14,8 @@ the close is held back, the supervisor stops the node the way its own shutdown
 expects, and the app exits once that is done. Closing it again while the stop is
 running changes nothing. [`app_quit`](#commands) is the same path, for a portal
 that has a quit of its own to offer.
+The native File menu offers **Quit Aruna Desktop** with `Command+Q` on macOS
+and `Ctrl+Q` elsewhere, using that same graceful shutdown path.
 
 ```
 window  ->  the portal artifact in ui/        (one build, web and desktop)

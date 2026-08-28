@@ -12,10 +12,13 @@ mod wayland;
 mod windows;
 
 use tauri::Manager;
+use tauri::menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder};
 use tauri_plugin_deep_link::DeepLinkExt;
 use tracing_subscriber::EnvFilter;
 
 use crate::state::AppState;
+
+const QUIT_MENU_ID: &str = "quit-aruna-desktop";
 
 /// Boots the native control window. The aruna node itself always runs as a
 /// supervised child process, never inside this process.
@@ -74,6 +77,18 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_shell::init())
+        .menu(|app| {
+            let quit = MenuItemBuilder::with_id(QUIT_MENU_ID, "Quit Aruna Desktop")
+                .accelerator("CmdOrCtrl+Q")
+                .build(app)?;
+            let file = SubmenuBuilder::new(app, "File").item(&quit).build()?;
+            MenuBuilder::new(app).item(&file).build()
+        })
+        .on_menu_event(|app, event| {
+            if event.id() == QUIT_MENU_ID {
+                tauri::async_runtime::spawn(windows::quit(app.clone()));
+            }
+        })
         .setup(|app| {
             let handle = app.handle().clone();
             let state = AppState::build(&handle)?;
