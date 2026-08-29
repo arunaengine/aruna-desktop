@@ -92,6 +92,8 @@ pub struct DeviceStatus {
     pub version: Option<String>,
     pub uptime_seconds: Option<u64>,
     pub message: Option<String>,
+    pub detail: Option<String>,
+    pub realm_mismatch: Option<RealmMismatch>,
 }
 
 /// What the shell knows the moment the secret is armed. The node id follows
@@ -143,8 +145,10 @@ pub async fn node_status(
         version: info.version,
         uptime_seconds: state.supervisor.uptime(),
         message: joining
-            .or(node.detail)
+            .or(node.detail.clone())
             .or_else(|| settings.paused.then(|| "the node is paused".to_string())),
+        detail: node.detail,
+        realm_mismatch: node.realm_mismatch,
     })
 }
 
@@ -587,6 +591,42 @@ mod tests {
             DeviceState::Error
         );
         assert_eq!(DeviceState::from(NodeState::Failed), DeviceState::Error);
+    }
+
+    #[test]
+    fn serializes_status_fields() {
+        let status = DeviceStatus {
+            state: DeviceState::Stopped,
+            ready: false,
+            node_id: None,
+            realm: Some("realm-old".into()),
+            enrolled: true,
+            enrolling: false,
+            api_base_url: None,
+            version: None,
+            uptime_seconds: None,
+            message: Some("the realm changed".into()),
+            detail: Some("the realm changed".into()),
+            realm_mismatch: Some(RealmMismatch {
+                expected: "realm-old".into(),
+                actual: "realm-new".into(),
+                realm_url: "https://aruna.example".into(),
+            }),
+        };
+        let value = serde_json::to_value(status).expect("a serializable status");
+
+        assert_eq!(
+            value.get("detail"),
+            Some(&serde_json::json!("the realm changed"))
+        );
+        assert_eq!(
+            value.get("realmMismatch"),
+            Some(&serde_json::json!({
+                "expected": "realm-old",
+                "actual": "realm-new",
+                "realmUrl": "https://aruna.example"
+            }))
+        );
     }
 
     #[test]
