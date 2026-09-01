@@ -54,7 +54,7 @@ pub struct NodeInfo {
 
 /// Reads what the local node publishes about itself.
 pub async fn info(client: &reqwest::Client, base: &str) -> Option<NodeInfo> {
-    let url = format!("{}/api/v1/info", base.trim_end_matches('/'));
+    let url = format!("{}/api/v1/system/info", base.trim_end_matches('/'));
     let response = client.get(&url).timeout(PROBE_TIMEOUT).send().await.ok()?;
     if !response.status().is_success() {
         return None;
@@ -80,7 +80,7 @@ fn read_info(body: &Value) -> NodeInfo {
 /// only fills its node list for a caller holding a realm token, so the realm id
 /// is the one field an anonymous desktop can rely on.
 pub async fn realm_id(client: &reqwest::Client, base: &str) -> Option<String> {
-    let url = format!("{}/api/v1/info/realm", base.trim_end_matches('/'));
+    let url = format!("{}/api/v1/system/realm", base.trim_end_matches('/'));
     let response = client.get(&url).timeout(REALM_TIMEOUT).send().await.ok()?;
     if !response.status().is_success() {
         return None;

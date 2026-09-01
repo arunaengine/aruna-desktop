@@ -110,7 +110,7 @@ pub async fn check(client: &reqwest::Client, origin: &str) -> Result<RealmTarget
     Ok(follow(client, target).await)
 }
 
-/// Every management node the realm published, from a node's `/info/realm`;
+/// Every management node the realm published, from a node's `/system/realm`;
 /// `None` when the node is one itself or names none.
 fn management_urls(realm: &Value) -> Option<Vec<String>> {
     if realm.get("is_management_node").and_then(Value::as_bool) == Some(true) {
@@ -129,7 +129,7 @@ fn management_urls(realm: &Value) -> Option<Vec<String>> {
 /// The first management node that answers replaces the target; a realm that
 /// names none reachable keeps the node the owner typed, and the portal explains.
 async fn follow(client: &reqwest::Client, target: RealmTarget) -> RealmTarget {
-    let realm = format!("{}/info/realm", target.api_base_url);
+    let realm = format!("{}/system/realm", target.api_base_url);
     let Some(urls) = get_json(client, &realm)
         .await
         .ok()
@@ -164,12 +164,12 @@ async fn follow(client: &reqwest::Client, target: RealmTarget) -> RealmTarget {
 async fn reach_api(client: &reqwest::Client, url: &str) -> Result<RealmTarget, Reach> {
     let api = url.trim_end_matches('/');
     let origin = normalize(api).map_err(|_| Reach::NotAruna)?;
-    let info = get_json(client, &format!("{api}/info")).await?;
+    let info = get_json(client, &format!("{api}/system/info")).await?;
     target(&origin, api, &info, false).ok_or(Reach::NotAruna)
 }
 
 /// Asks an origin whether it serves a realm: the portal's runtime config first,
-/// then the two places a node's `/info` route can sit.
+/// then the two places a node's `/system/info` route can sit.
 async fn reach(client: &reqwest::Client, origin: &str) -> Result<RealmTarget, Reach> {
     let config = get_json(client, &format!("{origin}{CONFIG_PATH}")).await;
     if let Err(reach) = &config
@@ -186,10 +186,10 @@ async fn reach(client: &reqwest::Client, origin: &str) -> Result<RealmTarget, Re
             .and_then(Value::as_str)
             .and_then(|raw| api_base(origin, raw))
     {
-        urls.push(format!("{base}/info"));
+        urls.push(format!("{base}/system/info"));
     }
-    urls.push(format!("{origin}/api/v1/info"));
-    urls.push(format!("{origin}/info"));
+    urls.push(format!("{origin}/api/v1/system/info"));
+    urls.push(format!("{origin}/system/info"));
 
     let mut failure = config.err();
     for url in urls {
@@ -217,12 +217,12 @@ fn api_base(origin: &str, raw: &str) -> Option<String> {
     Some(base.as_str().trim_end_matches('/').to_string())
 }
 
-/// The API base an `/info` probe URL stands for.
+/// The API base a `/system/info` probe URL stands for.
 fn api_of(url: &str) -> &str {
-    url.trim_end_matches("/info").trim_end_matches('/')
+    url.trim_end_matches("/system/info").trim_end_matches('/')
 }
 
-/// An `/info` body without a realm id is some other service answering on the
+/// A `/system/info` body without a realm id is some other service answering on the
 /// same address, not an aruna node.
 fn target(origin: &str, api_base: &str, info: &Value, portal: bool) -> Option<RealmTarget> {
     let realm = info.pointer("/node/realm_id").and_then(Value::as_str)?;
@@ -374,7 +374,7 @@ mod tests {
             "node": {"status": "available", "realm_id": "r-1"},
             "api_version": "3.0.0",
         });
-        let api = api_of("https://api.example/api/v1/info");
+        let api = api_of("https://api.example/api/v1/system/info");
         let found = target("https://aruna.example", api, &info, true).expect("an aruna node");
         assert_eq!(found.realm.as_deref(), Some("r-1"));
         assert_eq!(found.api_base_url, "https://api.example/api/v1");
