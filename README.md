@@ -115,9 +115,9 @@ reports as a missing bridge half rather than a failed call.
 | Command | Arguments | Answers |
 | --- | --- | --- |
 | `shell_context` | – | `{revision, apiBaseUrl, authCallbackOrigin?, realmUrl?, features}` |
-| `node_status` | – | `{state, ready, nodeId, realm, enrolled, enrolling, apiBaseUrl, version, uptimeSeconds, message}` |
+| `node_status` | – | `{state, ready, nodeId, realm, enrolled, enrolling, apiBaseUrl, version, uptimeSeconds, message, detail, realmMismatch}` |
 | `node_logs_tail` | `{lines}` | the last lines of the node's output, oldest first |
-| `node_settings_get` | – | `{storagePath, compute, paused, autoStart}` |
+| `node_settings_get` | – | `{storagePath, compute, s3Enabled, paused}` |
 | `node_settings_set` | `{settings}` (any subset) | the stored settings |
 | `compute_probe` | – | `{docker: {available, version, socket}, apptainer: {available, version, cgroupOk, cgroupRoot}}` |
 | `enroll_apply` | `{secret, seedUrl?, realm?, label?}` | `{nodeId, realm}` |
@@ -149,8 +149,8 @@ Notes on the ones that do more than they say:
   a caller holding a realm token, which the shell never has, so the portal reads
   it with the owner's own.
 * `node_settings_set` stops the node when `paused` turns on and starts it when
-  it turns off. `storagePath` and `compute` are read once at startup, so
-  changing either **restarts** a node that is up; everything else reaches the
+  it turns off. `storagePath`, `compute`, and `s3Enabled` are read at startup, so
+  changing any of them **restarts** a node that is up; everything else reaches the
   node on its next start. Synced folders are **not** shell settings: they live
   in the node, are bound through its `/device/folders` API and are wiped by
   `/device/wipe`.
@@ -182,7 +182,7 @@ Notes on the ones that do more than they say:
   and answers with the origin. Remembering is the point: it is what the portal
   talks to until a node of this device's own is serving. Only a management node
   enrolls a device or signs it in, so an address answered by any other kind is
-  **followed**: the node's `/info/realm` names the realm's management nodes and
+  **followed**: the node's `/system/realm` names the realm's management nodes and
   the first one that answers is remembered instead, with the typed address in
   `redirectedFrom`. A node that names none reachable is kept as typed. An **enrolled** device
   refuses it outright with `wipe this device before joining another realm`: its
@@ -386,8 +386,8 @@ Binary resolution, most specific first:
 3. `aruna` next to the desktop executable (the bundled sidecar),
 4. `<resources>/binaries/aruna`.
 
-Nothing is bundled yet, so a fresh install reports `No node binary` with the
-list of paths it searched, and the rest of the app keeps working.
+Release bundles include the sidecar. A development checkout without a synced
+node uses a recognised placeholder and reports how to install the binary.
 
 ### Configuration contract
 
@@ -462,11 +462,10 @@ the environment the app was launched from cannot configure the node's compute.
 | `ARUNA_COMPUTE_STATE_ROOT` | `<app data>/node/compute` |
 | `ARUNA_COMPUTE_APPTAINER_STATE_ROOT`, `ARUNA_COMPUTE_APPTAINER_SIF_CACHE` | `…/compute/apptainer` and `…/compute/sif` (apptainer only) |
 
-These key names **must** match the node's own configuration reference
-(`docs/compute-executors.md` in the aruna repository). `ARUNA_COMPUTE_LOCAL_ONLY`,
-`ARUNA_COMPUTE_KEEP_FAILED` and `ARUNA_COMPUTE_STATE_ROOT` are the device
-profile's own additions and are being finalised on the node side; the rest the
-node reads today.
+These key names **must** match the node's configuration and compute wiring in
+the Aruna repository (`aruna/src/config.rs` and `aruna/src/main.rs`).
+`ARUNA_COMPUTE_LOCAL_ONLY`, `ARUNA_COMPUTE_KEEP_FAILED`, and
+`ARUNA_COMPUTE_STATE_ROOT` are read by the current node wiring.
 
 `auto` prefers docker, because it needs no delegated cgroup of ours, and falls
 back to apptainer **only** where a delegated user slice was detected. Apptainer
@@ -491,8 +490,8 @@ whole local control surface:
     "maxDiskBytes": null,
     "keepFailed": false
   },
-  "paused": false,
-  "autoStart": false
+  "s3Enabled": true,
+  "paused": false
 }
 ```
 
@@ -503,6 +502,9 @@ owner says "no limit".
 
 The starting values are deliberately modest rather than a policy: one job at a
 time, no ceilings, the machine's own backend. It is the owner's machine.
+
+An enrolled device, or one with an armed enrollment secret, starts its node
+when the app launches unless paused. There is no `autoStart` setting.
 
 **Paused means nothing runs.** A paused node is stopped, so it serves nothing,
 syncs nothing and computes nothing; local jobs are refused with it. Resuming
@@ -546,7 +548,7 @@ builds exactly the three query keys above.
 The node needs **only `ONBOARDING_SECRET`**. The seed URL, the realm id, the
 enrollment id and the onboarding mode all travel inside the secret itself
 (`core/src/onboarding.rs`, postcard plus URL-safe base64), which the joiner
-decodes to reach `{seed}/api/v1/onboarding/bootstrap`.
+decodes to reach `{seed}/api/v1/access/onboarding/bootstrap`.
 
 The secret is stored once, is never sent to the webview, never logged, and is
 cleared the moment the node serves the realm. It must not be cleared earlier: a
@@ -554,7 +556,7 @@ node whose join is half done needs it again to resume.
 
 ### The two signals
 
-The device cannot poll `GET {seed}/api/v1/onboarding/secrets/{id}/status`: the
+The device cannot poll `GET {seed}/api/v1/access/onboarding/secrets/{id}/status`: the
 deep link carries no enrollment id, and the route needs a realm bearer token.
 Enrollment progress is therefore observed, never queried:
 
@@ -563,7 +565,7 @@ Enrollment progress is therefore observed, never queried:
    does, so readiness is the authoritative "the seed accepted this device". The
    supervisor polls it on every start for its own reason too: it is what makes
    the node [the API the portal talks to](#which-api-the-portal-talks-to).
-2. `GET http://127.0.0.1:34116/api/v1/info` reporting the `realm_id` from the
+2. `GET http://127.0.0.1:34116/api/v1/system/info` reporting the `realm_id` from the
    invitation. The seed is asked for it when a pasted secret named no realm.
 
 The join walks `received -> starting -> waiting -> visible -> done`, and only
