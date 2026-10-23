@@ -10,6 +10,8 @@ use super::NodeStatus;
 pub struct Slot {
     stop: Option<oneshot::Sender<()>>,
     done: Option<watch::Receiver<()>>,
+    /// Set for good once the app is quitting: no run may start after that.
+    closed: bool,
     /// Installed in the instant the slot frees, so no start comes in between.
     blocked: Option<NodeStatus>,
 }
@@ -26,9 +28,17 @@ impl Slot {
         self.done.is_some()
     }
 
-    /// `None` while another run owns the slot.
+    pub fn closed(&self) -> bool {
+        self.closed
+    }
+
+    pub fn close(&mut self) {
+        self.closed = true;
+    }
+
+    /// `None` while another run owns the slot, or once the slot is closed.
     pub fn claim(&mut self) -> Option<Claim> {
-        if self.busy() {
+        if self.busy() || self.closed {
             return None;
         }
         let (stop_sender, stop) = oneshot::channel();
@@ -62,6 +72,9 @@ impl Slot {
 
 #[cfg(test)]
 mod tests {
+    use std::future::Future;
+    use std::task::{Context, Waker};
+
     use super::*;
     use crate::node::NodeState;
 
@@ -100,22 +113,38 @@ mod tests {
         assert!(Slot::default().request_stop(None).is_none());
     }
 
-    #[tokio::test]
-    async fn waits_for_the_end() {
+    #[test]
+    fn waits_for_the_end() {
         // A second stop, such as a quit during a stop, must not return early.
         let mut slot = Slot::default();
         let claim = slot.claim().expect("a free slot");
         let mut first = slot.request_stop(None).expect("a run");
         let mut second = slot.request_stop(None).expect("a run");
+        let mut first = Box::pin(async move { first.changed().await });
+        let mut second = Box::pin(async move { second.changed().await });
+        let mut context = Context::from_waker(Waker::noop());
 
-        let waiting = tokio::spawn(async move {
-            let _ = first.changed().await;
-            let _ = second.changed().await;
-        });
-        assert!(!waiting.is_finished());
+        assert!(first.as_mut().poll(&mut context).is_pending());
+        assert!(second.as_mut().poll(&mut context).is_pending());
+        slot.release();
+        assert!(first.as_mut().poll(&mut context).is_pending());
+        drop(claim);
+        assert!(first.as_mut().poll(&mut context).is_ready());
+        assert!(second.as_mut().poll(&mut context).is_ready());
+    }
+
+    #[test]
+    fn refuses_runs_once_closed() {
+        let mut slot = Slot::default();
+        let claim = slot.claim().expect("a free slot");
+        slot.close();
+        assert!(slot.closed());
+
+        // The run that was live still ends the usual way; none follows it.
+        assert!(slot.request_stop(None).is_some());
         slot.release();
         drop(claim);
-        waiting.await.expect("both stops end with the run");
+        assert!(slot.claim().is_none());
     }
 
     #[test]
