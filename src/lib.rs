@@ -122,6 +122,8 @@ pub fn run() {
             });
 
             tauri::async_runtime::spawn(bridge::watch_version(handle.clone()));
+            #[cfg(unix)]
+            tauri::async_runtime::spawn(windows::quit_on_signal(handle.clone()));
 
             if settings.starts_on_launch() {
                 tauri::async_runtime::spawn(async move {

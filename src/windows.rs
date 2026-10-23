@@ -71,6 +71,26 @@ pub async fn quit(app: AppHandle) {
     app.exit(0);
 }
 
+/// Runs the quit path on SIGTERM or SIGINT, so a logout, a service stop or a
+/// kill leaves no node behind.
+#[cfg(unix)]
+pub async fn quit_on_signal(app: AppHandle) {
+    use tokio::signal::unix::{SignalKind, signal};
+
+    let (Ok(mut term), Ok(mut interrupt)) = (
+        signal(SignalKind::terminate()),
+        signal(SignalKind::interrupt()),
+    ) else {
+        tracing::warn!("Could not listen for termination signals");
+        return;
+    };
+    tokio::select! {
+        _ = term.recv() => {}
+        _ = interrupt.recv() => {}
+    }
+    quit(app).await;
+}
+
 /// Opens the provider's sign-in page in a window of the app's own. The provider
 /// redirects to this app's scheme; that navigation is never loaded but routed
 /// like a deep link, and the window closes on it. Closing it any other way
