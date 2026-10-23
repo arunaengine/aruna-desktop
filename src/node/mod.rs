@@ -149,10 +149,6 @@ impl Supervisor {
         self.record_blocked(status)
     }
 
-    pub fn record_update_required(&self, required: UpdateRequired) -> NodeStatus {
-        self.record_blocked(update_status(required))
-    }
-
     /// Stops a live node for good reason and leaves `required` as its status.
     /// The status is installed as the run frees its slot, so no start can slip
     /// in between, and the call returns once the child is gone.
@@ -200,15 +196,30 @@ impl Supervisor {
     /// file before spawning it. The run slot is claimed first, so a second
     /// start finds it taken instead of supervising a second node.
     pub fn start(&self) -> Result<NodeStatus, DesktopError> {
-        let claim = {
+        // Decided here, under the lock that claims the slot: whatever a caller
+        // saw before it awaited may be stale by now.
+        let (claim, settings) = {
             let mut inner = self.inner.lock().expect("supervisor poisoned");
+            let settings = self.settings.lock().expect("settings poisoned").clone();
+            match start_gate(inner.slot.closed(), &settings) {
+                Gate::Hold => return Ok(inner.status.clone()),
+                Gate::Update(_) if inner.slot.busy() => return Ok(inner.status.clone()),
+                Gate::Update(required) => {
+                    let status = update_status(required);
+                    inner.started = None;
+                    inner.status = status.clone();
+                    drop(inner);
+                    self.announce(status.clone());
+                    return Ok(status);
+                }
+                Gate::Go => {}
+            }
             match inner.slot.claim() {
-                Some(claim) => claim,
+                Some(claim) => (claim, settings),
                 None => return Ok(inner.status.clone()),
             }
         };
 
-        let settings = self.settings.lock().expect("settings poisoned").clone();
         if let Err(error) = settings.validate() {
             self.release();
             return Err(error);
@@ -256,6 +267,12 @@ impl Supervisor {
         if let Some(status) = blocked {
             self.announce(status);
         }
+    }
+
+    /// Stops the node and refuses every later start, for the app's last stop.
+    pub async fn shutdown(&self) -> NodeStatus {
+        self.inner.lock().expect("supervisor poisoned").slot.close();
+        self.stop().await
     }
 
     /// Signals the run loop and waits for the child to be gone. Every caller
@@ -561,6 +578,37 @@ fn transition(status: &NodeStatus, ready: bool) -> Option<NodeStatus> {
     })
 }
 
+/// What a start may do, from the settings as they are right now.
+#[derive(Debug, PartialEq, Eq)]
+enum Gate {
+    Go,
+    /// Quitting or paused: the start is a no-op.
+    Hold,
+    /// The realm last reported another version than the bundled node's.
+    Update(UpdateRequired),
+}
+
+fn start_gate(closed: bool, settings: &NodeSettings) -> Gate {
+    if closed || settings.paused {
+        return Gate::Hold;
+    }
+    if settings.joins_realm()
+        && let Some(required) = version_gap(settings.realm_version.as_deref())
+    {
+        return Gate::Update(required);
+    }
+    Gate::Go
+}
+
+/// Present when the realm runs another aruna version than the bundled node's.
+pub fn version_gap(realm: Option<&str>) -> Option<UpdateRequired> {
+    let realm = realm?;
+    (realm != env!("CARGO_PKG_VERSION")).then(|| UpdateRequired {
+        local: env!("CARGO_PKG_VERSION").to_string(),
+        realm: realm.to_string(),
+    })
+}
+
 fn update_status(required: UpdateRequired) -> NodeStatus {
     let detail = format!(
         "the realm runs aruna {} but this app bundles {}. Update the app or set this device up again.",
@@ -659,6 +707,59 @@ mod tests {
         // A tick that agrees with the published run emits nothing.
         assert!(transition(&status(NodeState::Running, true), true).is_none());
         assert!(transition(&status(NodeState::Running, false), false).is_none());
+    }
+
+    fn joined() -> NodeSettings {
+        let mut settings = NodeSettings::default();
+        settings.remember_realm(
+            "https://aruna.example",
+            "https://aruna.example/api/v1",
+            None,
+        );
+        settings.joined(Some("r-1".into()));
+        settings
+    }
+
+    #[test]
+    fn detects_version_gap() {
+        let local = env!("CARGO_PKG_VERSION");
+        assert_eq!(version_gap(Some(local)), None);
+        assert_eq!(version_gap(None), None);
+        assert_eq!(
+            version_gap(Some("3.0.0-alpha.1")),
+            Some(UpdateRequired {
+                local: local.into(),
+                realm: "3.0.0-alpha.1".into()
+            })
+        );
+    }
+
+    #[test]
+    fn holds_when_paused_or_closed() {
+        let mut settings = joined();
+        assert_eq!(start_gate(false, &settings), Gate::Go);
+        assert_eq!(start_gate(true, &settings), Gate::Hold);
+
+        // A pause stored while a start was still probing wins over it.
+        settings.paused = true;
+        assert_eq!(start_gate(false, &settings), Gate::Hold);
+    }
+
+    #[test]
+    fn blocks_a_known_mismatch() {
+        // The gate reads the version as it is now: a mismatch learned while a
+        // start was waiting on its probe still blocks that start.
+        let mut settings = joined();
+        settings.realm_version = Some(env!("CARGO_PKG_VERSION").into());
+        assert_eq!(start_gate(false, &settings), Gate::Go);
+
+        settings.realm_version = Some("3.0.0-alpha.1".into());
+        assert!(matches!(start_gate(false, &settings), Gate::Update(_)));
+
+        // A device that belongs to no realm has none to disagree with.
+        settings.wipe();
+        settings.realm_version = Some("3.0.0-alpha.1".into());
+        assert_eq!(start_gate(false, &settings), Gate::Go);
     }
 
     #[test]

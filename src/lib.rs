@@ -150,7 +150,7 @@ pub fn run() {
             // Last resort for any other way out; a stopped node is a no-op.
             tauri::RunEvent::Exit => {
                 if let Some(state) = app.try_state::<AppState>() {
-                    tauri::async_runtime::block_on(state.supervisor.stop());
+                    tauri::async_runtime::block_on(state.supervisor.shutdown());
                 }
             }
             _ => {}

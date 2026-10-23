@@ -67,7 +67,7 @@ pub async fn quit(app: AppHandle) {
     if !app.state::<AppState>().claim_quit() {
         return;
     }
-    app.state::<AppState>().supervisor.stop().await;
+    app.state::<AppState>().supervisor.shutdown().await;
     app.exit(0);
 }
 
