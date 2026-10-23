@@ -322,7 +322,11 @@ pub async fn validate_realm(
         .map_err(|reach| DesktopError::Unreachable(reach.message(&origin)))?;
 
     let mut settings = state.settings();
-    settings.remember_realm(&target.origin, &target.api_base_url);
+    settings.remember_realm(
+        &target.origin,
+        &target.api_base_url,
+        target.api_version.as_deref(),
+    );
     state.store(settings)?;
     shell::sync(&app);
     Ok(target)
@@ -462,8 +466,7 @@ pub(crate) async fn start_node(state: &AppState) -> Result<NodeStatus, DesktopEr
     let Some(realm_url) = realm_to_check(&settings) else {
         return state.supervisor.start();
     };
-    let target = check_realm(state, realm_url).await;
-    if let Some(target) = &target {
+    if let Some(target) = check_realm(state, realm_url).await {
         if settings.enrolled
             && let Some((expected, actual)) =
                 realm_mismatch(settings.realm.as_deref(), target.realm.as_deref())
@@ -474,13 +477,11 @@ pub(crate) async fn start_node(state: &AppState) -> Result<NodeStatus, DesktopEr
                 realm_url: realm_url.to_string(),
             }));
         }
-        remember_version(state, target.api_version.as_deref());
+        remember_version(state, realm_url, target.api_version.as_deref());
     }
-    let seen = target.and_then(|target| target.api_version);
-    match version_gap(seen.as_deref(), settings.realm_version.as_deref()) {
-        Some(required) => Ok(state.supervisor.record_update_required(required)),
-        None => state.supervisor.start(),
-    }
+    // The start itself weighs the stored version, the pause and a quit, as
+    // they are when it claims the run slot rather than as they were above.
+    state.supervisor.start()
 }
 
 async fn check_realm(state: &AppState, realm_url: &str) -> Option<RealmTarget> {
@@ -490,31 +491,28 @@ async fn check_realm(state: &AppState, realm_url: &str) -> Option<RealmTarget> {
         .ok()
 }
 
-fn remember_version(state: &AppState, version: Option<&str>) {
-    if let Some(version) = version
-        && let Err(error) = state.note_version(version)
-    {
-        tracing::warn!(%error, "Could not store the realm version");
+/// Stores what a probe of `realm_url` reported. False when that is no longer
+/// the current realm, so the result belongs to nobody and is dropped.
+fn remember_version(state: &AppState, realm_url: &str, version: Option<&str>) -> bool {
+    let Some(version) = version else {
+        return true;
+    };
+    match state.note_version(realm_url, version) {
+        Ok(current) => current,
+        Err(error) => {
+            tracing::warn!(%error, "Could not store the realm version");
+            true
+        }
     }
 }
 
 /// The realm a node start must agree with: only a device that joined, or is
 /// joining, belongs to one.
 fn realm_to_check(settings: &NodeSettings) -> Option<&str> {
-    (settings.enrolled || settings.onboarding_secret.is_some())
+    settings
+        .joins_realm()
         .then_some(settings.realm_url.as_deref())
         .flatten()
-}
-
-/// Present when the realm runs another aruna version than the bundled node's.
-/// What the realm just said wins; when it could not be asked, the version it
-/// last reported stands, so going offline never clears a known mismatch.
-fn version_gap(seen: Option<&str>, last: Option<&str>) -> Option<UpdateRequired> {
-    let realm = seen.or(last)?;
-    (realm != env!("CARGO_PKG_VERSION")).then(|| UpdateRequired {
-        local: env!("CARGO_PKG_VERSION").to_string(),
-        realm: realm.to_string(),
-    })
 }
 
 /// Keeps asking the realm for its version while a node runs, and stops the node
@@ -534,8 +532,10 @@ pub(crate) async fn watch_version(app: AppHandle) {
         let Some(target) = check_realm(&state, realm_url).await else {
             continue;
         };
-        remember_version(&state, target.api_version.as_deref());
-        if let Some(required) = version_gap(target.api_version.as_deref(), None) {
+        if !remember_version(&state, realm_url, target.api_version.as_deref()) {
+            continue;
+        }
+        if let Some(required) = node::version_gap(target.api_version.as_deref()) {
             tracing::warn!(realm = %required.realm, "The realm runs another aruna version");
             state.supervisor.stop_for_update(required).await;
             shell::sync(&app);
@@ -716,31 +716,13 @@ mod tests {
     }
 
     #[test]
-    fn detects_version_gap() {
-        let local = env!("CARGO_PKG_VERSION");
-        let older = Some("3.0.0-alpha.1");
-        let gap = Some(UpdateRequired {
-            local: local.into(),
-            realm: "3.0.0-alpha.1".into(),
-        });
-        assert_eq!(version_gap(Some(local), None), None);
-        assert_eq!(version_gap(None, None), None);
-        assert_eq!(version_gap(older, None), gap);
-
-        // Offline, the last report stands: a mismatch stays blocked, a match
-        // keeps the device usable.
-        assert_eq!(version_gap(None, older), gap);
-        assert_eq!(version_gap(None, Some(local)), None);
-
-        // What the realm says now replaces the last report in both directions.
-        assert_eq!(version_gap(Some(local), older), None);
-        assert_eq!(version_gap(older, Some(local)), gap);
-    }
-
-    #[test]
     fn checks_joined_realm_only() {
         let mut settings = NodeSettings::default();
-        settings.remember_realm("https://aruna.example", "https://aruna.example/api/v1");
+        settings.remember_realm(
+            "https://aruna.example",
+            "https://aruna.example/api/v1",
+            None,
+        );
         assert_eq!(realm_to_check(&settings), None);
 
         settings.onboarding_secret = Some("secret".into());
@@ -839,7 +821,11 @@ mod tests {
         let mut settings = NodeSettings::default();
         assert!(may_join(&settings).is_ok());
 
-        settings.remember_realm("https://aruna.example", "https://aruna.example/api/v1");
+        settings.remember_realm(
+            "https://aruna.example",
+            "https://aruna.example/api/v1",
+            None,
+        );
         settings.joined(Some("r-1".into()));
         let refusal = may_join(&settings).expect_err("an enrolled device");
         assert!(refusal.to_string().contains("wipe this device"));

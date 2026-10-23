@@ -83,18 +83,17 @@ impl AppState {
         Ok(())
     }
 
-    /// Keeps the realm's reported version with the settings, so it outlives
-    /// the launch. Nothing is written while it is unchanged.
-    pub fn note_version(&self, version: &str) -> Result<(), DesktopError> {
+    /// Keeps the version a probe of `realm_url` reported with the settings, so
+    /// it outlives the launch. False, and nothing stored, when the device has
+    /// moved to another realm since the probe was sent. The new value is in
+    /// effect at once; a failed write is reported but does not undo it.
+    pub fn note_version(&self, realm_url: &str, version: &str) -> Result<bool, DesktopError> {
         let mut settings = self.settings.lock().expect("settings poisoned");
-        if settings.realm_version.as_deref() == Some(version) {
-            return Ok(());
+        match settings.learn_version(realm_url, version) {
+            None => Ok(false),
+            Some(false) => Ok(true),
+            Some(true) => settings.save(&self.settings_path).map(|()| true),
         }
-        let mut changed = settings.clone();
-        changed.realm_version = Some(version.to_string());
-        changed.save(&self.settings_path)?;
-        *settings = changed;
-        Ok(())
     }
 
     pub fn progress(&self) -> EnrollProgress {

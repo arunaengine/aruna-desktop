@@ -164,7 +164,11 @@ mod tests {
 
     fn enrolled() -> NodeSettings {
         let mut settings = NodeSettings::default();
-        settings.remember_realm("https://aruna.example", "https://aruna.example/api/v1");
+        settings.remember_realm(
+            "https://aruna.example",
+            "https://aruna.example/api/v1",
+            None,
+        );
         settings.joined(Some("r-1".into()));
         settings
     }
@@ -196,7 +200,11 @@ mod tests {
     fn resolved_api_wins() {
         // A realm may serve its portal and API on separate listeners.
         let mut settings = NodeSettings::default();
-        settings.remember_realm("http://127.0.0.1:43025", "http://127.0.0.1:43021/api/v1");
+        settings.remember_realm(
+            "http://127.0.0.1:43025",
+            "http://127.0.0.1:43021/api/v1",
+            None,
+        );
         let context = context(&settings, false);
         assert_eq!(context.api_base_url, "http://127.0.0.1:43021/api/v1");
         assert_eq!(context.realm_url.as_deref(), Some("http://127.0.0.1:43025"));
