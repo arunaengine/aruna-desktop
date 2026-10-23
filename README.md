@@ -34,6 +34,7 @@ Cargo.toml  tauri.conf.json  build.rs      the app
 src/                                       its sources, fallback.html included
 capabilities/                              what the app window may call
 icons/                                     the bundle icon set, from the brand mark
+versions.json                              the pinned aruna version and portal release
 scripts/sync-frontend.sh                   installs the portal into ui/
 scripts/install-dev-desktop.sh             desktop entry + icons for a dev run
 ui/                                        the portal artifact (gitignored)
@@ -64,7 +65,7 @@ hosted portal.
 ```
 
 `version` is the command set below. A shell that answers fewer commands must not
-claim version 6.
+claim version 7.
 
 ### Which API the portal talks to
 
@@ -108,7 +109,7 @@ accepts.
 
 ## Commands
 
-Contract version 6. Arguments are a single object; answers are JSON. A name the
+Contract version 7. Arguments are a single object; answers are JSON. A name the
 shell does not implement is rejected with `unknown command: …`, which the portal
 reports as a missing bridge half rather than a failed call.
 
@@ -162,7 +163,10 @@ Notes on the ones that do more than they say:
 * `compute_probe` asks the machine, not the settings: it runs
   `docker version --format '{{.Server.Version}}'` and `apptainer version` with
   a short timeout, so `available` means the daemon answered rather than that a
-  client is installed. A backend that is not installed is unavailable, never an
+  client is installed. The socket is looked for in the usual places (rootless,
+  `/var/run`, Docker Desktop, Colima, OrbStack), the search path gains the
+  common install directories, and the socket found is passed to the node as
+  `DOCKER_HOST`. A backend that is not installed is unavailable, never an
   error. `cgroupOk` reports whether this login session owns a delegated cgroup
   slice with the `memory` and `pids` controllers. The node refuses to build the
   apptainer backend without one, so the shell does not choose apptainer while
@@ -258,14 +262,20 @@ scope: a sign-in this app started has a portal listening by definition.
 ## The node binary
 
 The node the app supervises is the Tauri sidecar `binaries/aruna-<target
-triple>`: the aruna workspace's own release binary, nothing forked. It is
-gitignored and installed with:
+triple>`: the aruna workspace's own release binary, nothing forked. Its
+version is pinned in `versions.json` and is also the version of this app. The
+sidecar is gitignored and installed with:
 
 ```bash
 scripts/sync-node.sh                  # builds ../aruna (or $ARUNA_DIR) in release mode
 scripts/sync-node.sh --no-build       # copies the binary that is already built
 ARUNA_NODE_BIN=/path/to/aruna scripts/sync-node.sh
 ```
+
+The build is `--locked` and stripped. Its features are `docker,apptainer` on
+Linux and `docker` elsewhere, because apptainer needs Linux-only APIs;
+`kubernetes` is never built in. The script refuses a checkout whose version is
+not the pinned one.
 
 tauri-build copies it next to the app executable, so a `cargo run` finds it in
 `target/<profile>/aruna`, and packaged builds bundle exactly that file: one
@@ -279,21 +289,27 @@ reports `run scripts/sync-node.sh` instead of running it.
 
 `.github/workflows/release.yml` builds one installer per platform, each with
 the app, the node and the portal inside: `.deb`, `.rpm` and `.AppImage` for
-Linux, `.msi` and an NSIS `.exe` for Windows, and a `.dmg` for Apple silicon
-and Intel Macs. It checks out `arunaengine/aruna` and `arunaengine/website` at
-the refs it is given (`main` by default), builds the node for the target,
-installs it and the portal through the two sync scripts, and runs
-`tauri build`. A `v*` tag publishes the bundles as a GitHub release; a manual
-run only uploads them as workflow artifacts.
+Linux (built on Ubuntu 22.04 for an older glibc), an NSIS `.exe` for Windows
+(MSI rejects pre-release versions), and a `.dmg` for Apple silicon. It checks
+out `arunaengine/aruna` at the ref pinned in `versions.json`, builds the node
+for the target, installs it and the pinned portal release through the two sync
+scripts, and runs `tauri build`. A `v*` tag must be `v` plus the pinned aruna
+version and publishes the bundles as a GitHub release; a manual run only
+uploads them as workflow artifacts.
 
 ## The portal artifact
 
 `ui/` holds the portal build the window serves. It is gitignored, and it is the
-same artifact a node serves, installed from the website repository:
+same artifact a node serves. The release is pinned in `versions.json` and is
+downloaded and checked against its sha256:
 
 ```bash
-scripts/sync-frontend.sh              # ../website, or $ARUNA_WEBSITE_DIR
+scripts/sync-frontend.sh
 ```
+
+If the download fails, the pinned website ref is exported from `../website` (or
+`$ARUNA_WEBSITE_DIR`) and built in a scratch directory. The checkout itself is
+not touched.
 
 The directory is called `ui` rather than `dist` because `dist` would read as
 this repository's own build output, which it is not: it is someone else's build,
