@@ -418,7 +418,8 @@ mod tests {
     #[test]
     fn keeps_existing_path() {
         // Directories already on the path stay where they are, once.
-        let kept = extend_path(Some(OsString::from("/a:/usr/local/bin")), None);
+        let input = std::env::join_paths(["/a", "/usr/local/bin"]).expect("a joinable path");
+        let kept = extend_path(Some(input), None);
         let dirs: Vec<PathBuf> = std::env::split_paths(&kept).collect();
         assert_eq!(dirs[0], Path::new("/a"));
         assert_eq!(
