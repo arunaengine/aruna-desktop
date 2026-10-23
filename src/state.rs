@@ -77,22 +77,41 @@ impl AppState {
 
     /// Replaces the stored settings and the file behind them together, so the
     /// next node start and the next launch agree.
-    pub fn store(&self, settings: NodeSettings) -> Result<(), DesktopError> {
+    pub fn store(&self, mut settings: NodeSettings) -> Result<(), DesktopError> {
         settings.save(&self.settings_path)?;
-        *self.settings.lock().expect("settings poisoned") = settings;
+        let mut current = self.settings.lock().expect("settings poisoned");
+        // The count only moves forward, whatever copy a caller edited.
+        settings.generation = settings.generation.max(current.generation);
+        *current = settings;
         Ok(())
     }
 
+    /// Voids every start and probe still waiting on an answer.
+    pub fn invalidate(&self) {
+        self.settings
+            .lock()
+            .expect("settings poisoned")
+            .invalidate();
+    }
+
     /// Keeps the version a probe of `realm_url` reported with the settings, so
-    /// it outlives the launch. False, and nothing stored, when the device has
-    /// moved to another realm since the probe was sent. The new value is in
-    /// effect at once; a failed write is reported but does not undo it.
-    pub fn note_version(&self, realm_url: &str, version: &str) -> Result<bool, DesktopError> {
+    /// it outlives the launch. `None`, and nothing stored, when the realm or
+    /// the generation the probe began under has changed since; otherwise the
+    /// generation to carry on with. The new value is in effect at once; a failed
+    /// write is reported but does not undo it.
+    pub fn note_version(
+        &self,
+        realm_url: &str,
+        generation: u64,
+        version: &str,
+    ) -> Result<Option<u64>, DesktopError> {
         let mut settings = self.settings.lock().expect("settings poisoned");
-        match settings.learn_version(realm_url, version) {
-            None => Ok(false),
-            Some(false) => Ok(true),
-            Some(true) => settings.save(&self.settings_path).map(|()| true),
+        match settings.learn_version(realm_url, generation, version) {
+            None => Ok(None),
+            Some(false) => Ok(Some(settings.generation)),
+            Some(true) => settings
+                .save(&self.settings_path)
+                .map(|()| Some(settings.generation)),
         }
     }
 

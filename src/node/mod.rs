@@ -195,13 +195,13 @@ impl Supervisor {
     /// Starts the run loop, which probes this machine and writes the node's env
     /// file before spawning it. The run slot is claimed first, so a second
     /// start finds it taken instead of supervising a second node.
-    pub fn start(&self) -> Result<NodeStatus, DesktopError> {
+    pub fn start(&self, generation: u64) -> Result<NodeStatus, DesktopError> {
         // Decided here, under the lock that claims the slot: whatever a caller
-        // saw before it awaited may be stale by now.
+        // saw before it awaited may be stale by now, which `generation` tells.
         let (claim, settings) = {
             let mut inner = self.inner.lock().expect("supervisor poisoned");
             let settings = self.settings.lock().expect("settings poisoned").clone();
-            match start_gate(inner.slot.closed(), &settings) {
+            match start_gate(inner.slot.closed(), generation, &settings) {
                 Gate::Hold => return Ok(inner.status.clone()),
                 Gate::Update(_) if inner.slot.busy() => return Ok(inner.status.clone()),
                 Gate::Update(required) => {
@@ -582,14 +582,14 @@ fn transition(status: &NodeStatus, ready: bool) -> Option<NodeStatus> {
 #[derive(Debug, PartialEq, Eq)]
 enum Gate {
     Go,
-    /// Quitting or paused: the start is a no-op.
+    /// Quitting, paused, or begun before a wipe or realm change: a no-op.
     Hold,
     /// The realm last reported another version than the bundled node's.
     Update(UpdateRequired),
 }
 
-fn start_gate(closed: bool, settings: &NodeSettings) -> Gate {
-    if closed || settings.paused {
+fn start_gate(closed: bool, generation: u64, settings: &NodeSettings) -> Gate {
+    if closed || settings.paused || settings.generation != generation {
         return Gate::Hold;
     }
     if settings.joins_realm()
@@ -737,12 +737,43 @@ mod tests {
     #[test]
     fn holds_when_paused_or_closed() {
         let mut settings = joined();
-        assert_eq!(start_gate(false, &settings), Gate::Go);
-        assert_eq!(start_gate(true, &settings), Gate::Hold);
+        assert_eq!(start_gate(false, settings.generation, &settings), Gate::Go);
+        assert_eq!(start_gate(true, settings.generation, &settings), Gate::Hold);
 
         // A pause stored while a start was still probing wins over it.
         settings.paused = true;
-        assert_eq!(start_gate(false, &settings), Gate::Hold);
+        assert_eq!(
+            start_gate(false, settings.generation, &settings),
+            Gate::Hold
+        );
+    }
+
+    #[test]
+    fn drops_starts_before_a_wipe() {
+        // A start that began before the wipe finds wiped settings, which would
+        // let it through; the count tells it apart.
+        let mut settings = joined();
+        settings.paused = true;
+        let begun = settings.generation;
+
+        settings.invalidate();
+        settings.wipe();
+        assert_eq!(start_gate(false, settings.generation, &settings), Gate::Go);
+        assert_eq!(start_gate(false, begun, &settings), Gate::Hold);
+    }
+
+    #[test]
+    fn drops_starts_before_a_change() {
+        let mut settings = joined();
+        let begun = settings.generation;
+        assert_eq!(start_gate(false, begun, &settings), Gate::Go);
+
+        settings.remember_realm(
+            "https://other.example",
+            "https://other.example/api/v1",
+            None,
+        );
+        assert_eq!(start_gate(false, begun, &settings), Gate::Hold);
     }
 
     #[test]
@@ -751,15 +782,18 @@ mod tests {
         // start was waiting on its probe still blocks that start.
         let mut settings = joined();
         settings.realm_version = Some(env!("CARGO_PKG_VERSION").into());
-        assert_eq!(start_gate(false, &settings), Gate::Go);
+        assert_eq!(start_gate(false, settings.generation, &settings), Gate::Go);
 
         settings.realm_version = Some("3.0.0-alpha.1".into());
-        assert!(matches!(start_gate(false, &settings), Gate::Update(_)));
+        assert!(matches!(
+            start_gate(false, settings.generation, &settings),
+            Gate::Update(_)
+        ));
 
         // A device that belongs to no realm has none to disagree with.
         settings.wipe();
         settings.realm_version = Some("3.0.0-alpha.1".into());
-        assert_eq!(start_gate(false, &settings), Gate::Go);
+        assert_eq!(start_gate(false, settings.generation, &settings), Gate::Go);
     }
 
     #[test]

@@ -364,6 +364,8 @@ pub async fn wipe_device(
             "type {WIPE_PHRASE} to confirm the wipe"
         )));
     }
+    // Before the stop, so a start still waiting on its probe cannot follow it.
+    state.invalidate();
     state.supervisor.stop().await;
 
     let settings = state.settings();
@@ -463,8 +465,9 @@ pub fn api_base(settings: &NodeSettings) -> String {
 
 pub(crate) async fn start_node(state: &AppState) -> Result<NodeStatus, DesktopError> {
     let settings = state.settings();
+    let mut generation = settings.generation;
     let Some(realm_url) = realm_to_check(&settings) else {
-        return state.supervisor.start();
+        return state.supervisor.start(generation);
     };
     if let Some(target) = check_realm(state, realm_url).await {
         if settings.enrolled
@@ -477,11 +480,18 @@ pub(crate) async fn start_node(state: &AppState) -> Result<NodeStatus, DesktopEr
                 realm_url: realm_url.to_string(),
             }));
         }
-        remember_version(state, realm_url, target.api_version.as_deref());
+        // An answer that lost to a wipe, a realm change or a newer probe ends
+        // this start; whatever changed has its own say in what runs.
+        let Some(current) =
+            remember_version(state, realm_url, generation, target.api_version.as_deref())
+        else {
+            return Ok(state.supervisor.status());
+        };
+        generation = current;
     }
-    // The start itself weighs the stored version, the pause and a quit, as
-    // they are when it claims the run slot rather than as they were above.
-    state.supervisor.start()
+    // The start itself weighs the stored version, the pause, a quit and the
+    // generation, as they are when it claims the run slot.
+    state.supervisor.start(generation)
 }
 
 async fn check_realm(state: &AppState, realm_url: &str) -> Option<RealmTarget> {
@@ -491,17 +501,23 @@ async fn check_realm(state: &AppState, realm_url: &str) -> Option<RealmTarget> {
         .ok()
 }
 
-/// Stores what a probe of `realm_url` reported. False when that is no longer
-/// the current realm, so the result belongs to nobody and is dropped.
-fn remember_version(state: &AppState, realm_url: &str, version: Option<&str>) -> bool {
+/// Stores what a probe of `realm_url` reported, which began under `generation`.
+/// `None` when it is out of date and was dropped; otherwise the generation the
+/// caller carries on with.
+fn remember_version(
+    state: &AppState,
+    realm_url: &str,
+    generation: u64,
+    version: Option<&str>,
+) -> Option<u64> {
     let Some(version) = version else {
-        return true;
+        return Some(generation);
     };
-    match state.note_version(realm_url, version) {
+    match state.note_version(realm_url, generation, version) {
         Ok(current) => current,
         Err(error) => {
             tracing::warn!(%error, "Could not store the realm version");
-            true
+            Some(state.settings().generation)
         }
     }
 }
@@ -532,7 +548,9 @@ pub(crate) async fn watch_version(app: AppHandle) {
         let Some(target) = check_realm(&state, realm_url).await else {
             continue;
         };
-        if !remember_version(&state, realm_url, target.api_version.as_deref()) {
+        let generation = settings.generation;
+        if remember_version(&state, realm_url, generation, target.api_version.as_deref()).is_none()
+        {
             continue;
         }
         if let Some(required) = node::version_gap(target.api_version.as_deref()) {
