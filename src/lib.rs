@@ -82,7 +82,17 @@ pub fn run() {
                 .accelerator("CmdOrCtrl+Q")
                 .build(app)?;
             let file = SubmenuBuilder::new(app, "File").item(&quit).build()?;
-            MenuBuilder::new(app).item(&file).build()
+            // Without these the webview gets no Cmd+C, Cmd+V or Cmd+A on macOS.
+            let edit = SubmenuBuilder::new(app, "Edit")
+                .undo()
+                .redo()
+                .separator()
+                .cut()
+                .copy()
+                .paste()
+                .select_all()
+                .build()?;
+            MenuBuilder::new(app).item(&file).item(&edit).build()
         })
         .on_menu_event(|app, event| {
             if event.id() == QUIT_MENU_ID {
