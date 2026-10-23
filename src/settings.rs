@@ -173,6 +173,10 @@ pub struct NodeSettings {
     pub realm_version: Option<String>,
     /// Set once the realm has listed this node.
     pub enrolled: bool,
+    /// Counts wipes, realm changes and cached-version updates, in memory only.
+    /// A start or a probe that began under another count is out of date.
+    #[serde(skip)]
+    pub generation: u64,
     /// Escape hatch for node keys the desktop does not model yet.
     pub extra_env: BTreeMap<String, String>,
 }
@@ -196,6 +200,7 @@ impl Default for NodeSettings {
             realm_api_url: None,
             realm_version: None,
             enrolled: false,
+            generation: 0,
             extra_env: BTreeMap::new(),
         }
     }
@@ -285,6 +290,7 @@ impl NodeSettings {
     /// configuration stays, so the app is usable afterwards. Synced folders
     /// live in the node and go with `/device/wipe`.
     pub fn wipe(&mut self) {
+        self.invalidate();
         self.onboarding_secret = None;
         self.seed_url = None;
         self.realm = None;
@@ -303,6 +309,7 @@ impl NodeSettings {
     /// Remembers the realm the portal window opens, where its API answers and
     /// the aruna version it reported.
     pub fn remember_realm(&mut self, url: &str, api: &str, version: Option<&str>) {
+        let before = (self.realm_url.clone(), self.realm_version.clone());
         if self.realm_url.as_deref() != Some(url) {
             self.realm_version = None;
         }
@@ -310,19 +317,33 @@ impl NodeSettings {
             self.realm_version = Some(version.to_string());
         }
         self.realm_url = Some(url.to_string());
+        if before != (self.realm_url.clone(), self.realm_version.clone()) {
+            self.invalidate();
+        }
         self.realm_api_url = Some(api.to_string());
     }
 
-    /// Stores a version a probe of `realm_url` reported. Answers `None` and
-    /// stores nothing when that is no longer the current realm, otherwise
-    /// whether the stored version changed.
-    pub fn learn_version(&mut self, realm_url: &str, version: &str) -> Option<bool> {
-        if self.realm_url.as_deref() != Some(realm_url) {
+    /// Makes every start and probe that began before this call out of date.
+    pub fn invalidate(&mut self) {
+        self.generation = self.generation.wrapping_add(1);
+    }
+
+    /// Stores a version a probe of `realm_url` reported. `generation` is what
+    /// the probe began under: answers `None` and stores nothing when that, or
+    /// the realm, has changed since, otherwise whether the version changed.
+    pub fn learn_version(
+        &mut self,
+        realm_url: &str,
+        generation: u64,
+        version: &str,
+    ) -> Option<bool> {
+        if self.realm_url.as_deref() != Some(realm_url) || self.generation != generation {
             return None;
         }
         let changed = self.realm_version.as_deref() != Some(version);
         if changed {
             self.realm_version = Some(version.to_string());
+            self.invalidate();
         }
         Some(changed)
     }
@@ -336,6 +357,7 @@ impl NodeSettings {
             && let Ok(origin) = crate::realm::normalize(seed)
         {
             self.realm_url = Some(origin);
+            self.invalidate();
         }
         self.onboarding_secret = Some(secret);
         self.seed_url = seed;
@@ -995,20 +1017,62 @@ mod tests {
         settings.remember_realm("https://b.example", "https://b.example/api/v1", None);
 
         assert_eq!(
-            settings.learn_version("https://a.example", "3.0.0-alpha.1"),
+            settings.learn_version("https://a.example", settings.generation, "3.0.0-alpha.1"),
             None
         );
         assert!(settings.realm_version.is_none());
 
         assert_eq!(
-            settings.learn_version("https://b.example", "3.0.0-alpha.2"),
+            settings.learn_version("https://b.example", settings.generation, "3.0.0-alpha.2"),
             Some(true)
         );
         assert_eq!(
-            settings.learn_version("https://b.example", "3.0.0-alpha.2"),
+            settings.learn_version("https://b.example", settings.generation, "3.0.0-alpha.2"),
             Some(false)
         );
         assert_eq!(settings.realm_version.as_deref(), Some("3.0.0-alpha.2"));
+    }
+
+    #[test]
+    fn drops_overlapping_probe() {
+        // A start probe that saw the old version must not overwrite what a
+        // probe started after it already cached.
+        let mut settings = NodeSettings::default();
+        settings.remember_realm(
+            "https://aruna.example",
+            "https://aruna.example/api/v1",
+            Some("3.0.0-alpha.131"),
+        );
+        let begun = settings.generation;
+
+        assert_eq!(
+            settings.learn_version("https://aruna.example", begun, "3.0.0-alpha.132"),
+            Some(true)
+        );
+        assert_eq!(
+            settings.learn_version("https://aruna.example", begun, "3.0.0-alpha.131"),
+            None
+        );
+        assert_eq!(settings.realm_version.as_deref(), Some("3.0.0-alpha.132"));
+    }
+
+    #[test]
+    fn counts_only_changes() {
+        let mut settings = NodeSettings::default();
+        let url = "https://aruna.example";
+        settings.remember_realm(url, "https://aruna.example/api/v1", Some("3.0.0-alpha.1"));
+        let known = settings.generation;
+
+        // Hearing the same thing again moves nothing.
+        settings.remember_realm(url, "https://aruna.example/api/v1", Some("3.0.0-alpha.1"));
+        assert_eq!(
+            settings.learn_version(url, known, "3.0.0-alpha.1"),
+            Some(false)
+        );
+        assert_eq!(settings.generation, known);
+
+        settings.wipe();
+        assert!(settings.generation > known);
     }
 
     #[test]
