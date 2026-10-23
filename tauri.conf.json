@@ -25,6 +25,11 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "publisher": "Aruna Engine",
+    "copyright": "Copyright (c) 2026 The Aruna Contributors",
+    "license": "MIT OR Apache-2.0",
+    "category": "Productivity",
+    "shortDescription": "Desktop shell for a local Aruna user node",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
