@@ -122,6 +122,21 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(handler)
-        .run(tauri::generate_context!())
-        .expect("failed to start the Aruna Desktop app")
+        .build(tauri::generate_context!())
+        .expect("failed to build the Aruna Desktop app")
+        .run(|app, event| match event {
+            // A Dock quit, a logout or an updater restart skips the close
+            // handler, so the node is stopped here before the app may end.
+            tauri::RunEvent::ExitRequested { api, code: None, .. } => {
+                api.prevent_exit();
+                tauri::async_runtime::spawn(windows::quit(app.clone()));
+            }
+            // Last resort for any other way out; a stopped node is a no-op.
+            tauri::RunEvent::Exit => {
+                if let Some(state) = app.try_state::<AppState>() {
+                    tauri::async_runtime::block_on(state.supervisor.stop());
+                }
+            }
+            _ => {}
+        });
 }
