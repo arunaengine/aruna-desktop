@@ -59,7 +59,7 @@ hosted portal.
   "apiBaseUrl": "http://127.0.0.1:34116/api/v1",
   "authCallbackOrigin": "http://127.0.0.1:34115", // only with a local portal
   "features": { "desktop": true, "systemBrowserAuth": false, "embeddedAuth": true },
-  "bridge": { "invoke": "…", "version": 6 }
+  "bridge": { "invoke": "…", "version": 7 }
 }
 ```
 
@@ -115,7 +115,7 @@ reports as a missing bridge half rather than a failed call.
 | Command | Arguments | Answers |
 | --- | --- | --- |
 | `shell_context` | – | `{revision, apiBaseUrl, authCallbackOrigin?, realmUrl?, features}` |
-| `node_status` | – | `{state, ready, nodeId, realm, enrolled, enrolling, apiBaseUrl, version, uptimeSeconds, message, detail, realmMismatch}` |
+| `node_status` | – | `{state, ready, nodeId, realm, enrolled, enrolling, apiBaseUrl, version, uptimeSeconds, message, detail, realmMismatch, updateRequired}` |
 | `node_logs_tail` | `{lines}` | the last lines of the node's output, oldest first |
 | `node_settings_get` | – | `{storagePath, compute, s3Enabled, paused}` |
 | `node_settings_set` | `{settings}` (any subset) | the stored settings |
@@ -141,6 +141,11 @@ Notes on the ones that do more than they say:
   event carries, and the one the shell context follows. `apiBaseUrl` follows it
   too; it is filled only while the node **serves**, never while it is merely
   running, so it is never an address that would refuse the call.
+* `updateRequired` (`{local, realm}`) is set while the realm runs another aruna
+  version than this app bundles. Every node of a realm runs one version, so the
+  node is not started, and a running one is stopped within a minute of the
+  realm moving on. The state stays until the app is updated or the device is
+  wiped and set up again.
 * `node_status` is also where a running enrollment is observed: it probes the
   node, advances the join, and spends the one-time secret once the node serves
   the realm. `enrolling` is that join while it lasts: a secret is armed and the

@@ -56,6 +56,15 @@ pub struct RealmMismatch {
     pub realm_url: String,
 }
 
+/// The realm runs another aruna version than this app bundles. Every node of a
+/// realm must run the same one, so the local node does not join.
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateRequired {
+    pub local: String,
+    pub realm: String,
+}
+
 #[derive(Clone, Debug, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NodeStatus {
@@ -67,6 +76,7 @@ pub struct NodeStatus {
     pub binary: Option<String>,
     pub detail: Option<String>,
     pub realm_mismatch: Option<RealmMismatch>,
+    pub update_required: Option<UpdateRequired>,
     pub restarts: u32,
     pub last_exit: Option<i32>,
 }
@@ -138,6 +148,26 @@ impl Supervisor {
             realm_mismatch: Some(mismatch),
             ..NodeStatus::default()
         };
+        self.record_blocked(status)
+    }
+
+    pub fn record_update_required(&self, required: UpdateRequired) -> NodeStatus {
+        let detail = format!(
+            "the realm runs aruna {} but this app bundles {}. Update the app or set this device up again.",
+            required.realm, required.local
+        );
+        let status = NodeStatus {
+            state: NodeState::Stopped,
+            detail: Some(detail),
+            update_required: Some(required),
+            ..NodeStatus::default()
+        };
+        self.record_blocked(status)
+    }
+
+    /// Publishes a stopped status that explains why no node was started. A run
+    /// that already holds the slot keeps its own status.
+    fn record_blocked(&self, status: NodeStatus) -> NodeStatus {
         let mut inner = self.inner.lock().expect("supervisor poisoned");
         if inner.task.is_some() || inner.stop.is_some() {
             return inner.status.clone();

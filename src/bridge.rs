@@ -17,7 +17,7 @@ use crate::deep_link::{EnrollInvite, EnrollLink};
 use crate::enroll::{EnrollPhase, Observed};
 use crate::error::DesktopError;
 use crate::node::compute::ComputeProbe;
-use crate::node::{self, NodeInfo, NodeState, NodeStatus, RealmMismatch};
+use crate::node::{self, NodeInfo, NodeState, NodeStatus, RealmMismatch, UpdateRequired};
 use crate::realm::{self, RealmTarget};
 use crate::settings::{LocalSettings, NodeSettings, SettingsPatch};
 use crate::shell::{self, ShellContext};
@@ -48,6 +48,8 @@ pub const KNOWN: [&str; 15] = [
 /// portal asks for it too; the shell never trusts that it did.
 const WIPE_PHRASE: &str = "wipe";
 const REALM_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
+/// How often a running node is checked against the realm's version.
+const VERSION_POLL: Duration = Duration::from_secs(60);
 
 /// The supervisor's state in the four the portal renders. `Stopping` counts as
 /// stopped and `Restarting` as starting: both are on their way to that state.
@@ -94,6 +96,8 @@ pub struct DeviceStatus {
     pub message: Option<String>,
     pub detail: Option<String>,
     pub realm_mismatch: Option<RealmMismatch>,
+    /// Set while the realm runs another aruna version than this app bundles.
+    pub update_required: Option<UpdateRequired>,
 }
 
 /// What the shell knows the moment the secret is armed. The node id follows
@@ -149,6 +153,7 @@ pub async fn node_status(
             .or_else(|| settings.paused.then(|| "the node is paused".to_string())),
         detail: node.detail,
         realm_mismatch: node.realm_mismatch,
+        update_required: node.update_required,
     })
 }
 
@@ -452,20 +457,70 @@ pub fn api_base(settings: &NodeSettings) -> String {
 
 pub(crate) async fn start_node(state: &AppState) -> Result<NodeStatus, DesktopError> {
     let settings = state.settings();
-    if settings.enrolled
-        && let Some(realm_url) = settings.realm_url.as_deref()
+    if let Some(realm_url) = realm_to_check(&settings)
         && let Ok(Ok(target)) =
             tokio::time::timeout(REALM_PROBE_TIMEOUT, realm::check(&state.http, realm_url)).await
-        && let Some((expected, actual)) =
-            realm_mismatch(settings.realm.as_deref(), target.realm.as_deref())
     {
-        return Ok(state.supervisor.record_realm_mismatch(RealmMismatch {
-            expected,
-            actual,
-            realm_url: realm_url.to_string(),
-        }));
+        if settings.enrolled
+            && let Some((expected, actual)) =
+                realm_mismatch(settings.realm.as_deref(), target.realm.as_deref())
+        {
+            return Ok(state.supervisor.record_realm_mismatch(RealmMismatch {
+                expected,
+                actual,
+                realm_url: realm_url.to_string(),
+            }));
+        }
+        if let Some(required) = version_gap(target.api_version.as_deref()) {
+            return Ok(state.supervisor.record_update_required(required));
+        }
     }
     state.supervisor.start()
+}
+
+/// The realm a node start must agree with: only a device that joined, or is
+/// joining, belongs to one.
+fn realm_to_check(settings: &NodeSettings) -> Option<&str> {
+    (settings.enrolled || settings.onboarding_secret.is_some())
+        .then_some(settings.realm_url.as_deref())
+        .flatten()
+}
+
+/// Present when the realm names an aruna version other than the bundled node's.
+fn version_gap(realm: Option<&str>) -> Option<UpdateRequired> {
+    let realm = realm?;
+    (realm != env!("CARGO_PKG_VERSION")).then(|| UpdateRequired {
+        local: env!("CARGO_PKG_VERSION").to_string(),
+        realm: realm.to_string(),
+    })
+}
+
+/// Keeps asking the realm for its version while a node runs, and stops the node
+/// once the realm moved on.
+pub(crate) async fn watch_version(app: AppHandle) {
+    loop {
+        tokio::time::sleep(VERSION_POLL).await;
+        let state = app.state::<AppState>();
+        let live = matches!(
+            state.supervisor.status().state,
+            NodeState::Starting | NodeState::Running
+        );
+        let settings = state.settings();
+        let Some(realm_url) = realm_to_check(&settings).filter(|_| live) else {
+            continue;
+        };
+        let Ok(Ok(target)) =
+            tokio::time::timeout(REALM_PROBE_TIMEOUT, realm::check(&state.http, realm_url)).await
+        else {
+            continue;
+        };
+        if let Some(required) = version_gap(target.api_version.as_deref()) {
+            tracing::warn!(realm = %required.realm, "The realm runs another aruna version");
+            state.supervisor.stop().await;
+            state.supervisor.record_update_required(required);
+            shell::sync(&app);
+        }
+    }
 }
 
 fn realm_mismatch(settings_realm: Option<&str>, probed: Option<&str>) -> Option<(String, String)> {
@@ -612,6 +667,10 @@ mod tests {
                 actual: "realm-new".into(),
                 realm_url: "https://aruna.example".into(),
             }),
+            update_required: Some(UpdateRequired {
+                local: "3.0.0-alpha.1".into(),
+                realm: "3.0.0-alpha.2".into(),
+            }),
         };
         let value = serde_json::to_value(status).expect("a serializable status");
 
@@ -627,6 +686,41 @@ mod tests {
                 "realmUrl": "https://aruna.example"
             }))
         );
+        assert_eq!(
+            value.get("updateRequired"),
+            Some(&serde_json::json!({
+                "local": "3.0.0-alpha.1",
+                "realm": "3.0.0-alpha.2"
+            }))
+        );
+    }
+
+    #[test]
+    fn detects_version_gap() {
+        let local = env!("CARGO_PKG_VERSION");
+        assert_eq!(version_gap(Some(local)), None);
+        assert_eq!(version_gap(None), None);
+        assert_eq!(
+            version_gap(Some("3.0.0-alpha.1")),
+            Some(UpdateRequired {
+                local: local.into(),
+                realm: "3.0.0-alpha.1".into()
+            })
+        );
+    }
+
+    #[test]
+    fn checks_joined_realm_only() {
+        let mut settings = NodeSettings::default();
+        settings.remember_realm("https://aruna.example", "https://aruna.example/api/v1");
+        assert_eq!(realm_to_check(&settings), None);
+
+        settings.onboarding_secret = Some("secret".into());
+        assert_eq!(realm_to_check(&settings), Some("https://aruna.example"));
+
+        settings.onboarding_secret = None;
+        settings.joined(Some("r-1".into()));
+        assert_eq!(realm_to_check(&settings), Some("https://aruna.example"));
     }
 
     #[test]

@@ -111,6 +111,8 @@ pub fn run() {
                 }
             });
 
+            tauri::async_runtime::spawn(bridge::watch_version(handle.clone()));
+
             if settings.starts_on_launch() {
                 tauri::async_runtime::spawn(async move {
                     let state = handle.state::<AppState>();
@@ -127,7 +129,9 @@ pub fn run() {
         .run(|app, event| match event {
             // A Dock quit, a logout or an updater restart skips the close
             // handler, so the node is stopped here before the app may end.
-            tauri::RunEvent::ExitRequested { api, code: None, .. } => {
+            tauri::RunEvent::ExitRequested {
+                api, code: None, ..
+            } => {
                 api.prevent_exit();
                 tauri::async_runtime::spawn(windows::quit(app.clone()));
             }
