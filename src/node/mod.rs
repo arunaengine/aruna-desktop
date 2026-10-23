@@ -2,6 +2,7 @@ mod binary;
 pub mod compute;
 mod health;
 mod logs;
+mod slot;
 
 use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Stdio};
@@ -19,6 +20,7 @@ use crate::settings::NodeSettings;
 
 pub use health::{NodeInfo, info, probe, ready, realm_id};
 pub use logs::{LogBuffer, Stream};
+use slot::{Claim, Slot};
 
 /// Emitted to the frontend whenever the supervised node changes state.
 pub const STATUS_EVENT: &str = "node-status";
@@ -86,11 +88,7 @@ struct Inner {
     status: NodeStatus,
     /// When the current run reached `Running`, for the uptime the portal shows.
     started: Option<std::time::Instant>,
-    stop: Option<oneshot::Sender<()>>,
-    task: Option<tauri::async_runtime::JoinHandle<()>>,
-    /// Which start owns the run slot, so an older run loop ending cannot free
-    /// a slot a newer start already claimed.
-    generation: u64,
+    slot: Slot,
 }
 
 /// Owns the node child process: one run loop per start, restarts on unexpected
@@ -152,60 +150,74 @@ impl Supervisor {
     }
 
     pub fn record_update_required(&self, required: UpdateRequired) -> NodeStatus {
-        let detail = format!(
-            "the realm runs aruna {} but this app bundles {}. Update the app or set this device up again.",
-            required.realm, required.local
-        );
-        let status = NodeStatus {
-            state: NodeState::Stopped,
-            detail: Some(detail),
-            update_required: Some(required),
-            ..NodeStatus::default()
+        self.record_blocked(update_status(required))
+    }
+
+    /// Stops a live node for good reason and leaves `required` as its status.
+    /// The status is installed as the run frees its slot, so no start can slip
+    /// in between, and the call returns once the child is gone.
+    pub async fn stop_for_update(&self, required: UpdateRequired) -> NodeStatus {
+        let status = update_status(required);
+        let done = {
+            let mut inner = self.inner.lock().expect("supervisor poisoned");
+            let done = inner.slot.request_stop(Some(status.clone()));
+            if done.is_none() {
+                inner.started = None;
+                inner.status = status.clone();
+            }
+            done
         };
-        self.record_blocked(status)
+        match done {
+            Some(mut done) => {
+                let _ = done.changed().await;
+            }
+            None => self.announce(status),
+        }
+        self.status()
     }
 
     /// Publishes a stopped status that explains why no node was started. A run
     /// that already holds the slot keeps its own status.
     fn record_blocked(&self, status: NodeStatus) -> NodeStatus {
         let mut inner = self.inner.lock().expect("supervisor poisoned");
-        if inner.task.is_some() || inner.stop.is_some() {
+        if inner.slot.busy() {
             return inner.status.clone();
         }
         inner.started = None;
         inner.status = status.clone();
         drop(inner);
-        if let Err(error) = self.app.emit(STATUS_EVENT, status.clone()) {
+        self.announce(status.clone());
+        status
+    }
+
+    fn announce(&self, status: NodeStatus) {
+        if let Err(error) = self.app.emit(STATUS_EVENT, status) {
             tracing::warn!(%error, "Could not emit the node status");
         }
-        status
     }
 
     /// Starts the run loop, which probes this machine and writes the node's env
     /// file before spawning it. The run slot is claimed first, so a second
     /// start finds it taken instead of supervising a second node.
     pub fn start(&self) -> Result<NodeStatus, DesktopError> {
-        let (sender, receiver) = oneshot::channel();
-        let generation = {
+        let claim = {
             let mut inner = self.inner.lock().expect("supervisor poisoned");
-            if inner.task.is_some() || inner.stop.is_some() {
-                return Ok(inner.status.clone());
+            match inner.slot.claim() {
+                Some(claim) => claim,
+                None => return Ok(inner.status.clone()),
             }
-            inner.generation += 1;
-            inner.stop = Some(sender);
-            inner.generation
         };
 
         let settings = self.settings.lock().expect("settings poisoned").clone();
         if let Err(error) = settings.validate() {
-            self.release(generation);
+            self.release();
             return Err(error);
         }
 
         let binary = match binary::resolve(&settings, self.resources.as_deref()) {
             Ok(path) => path,
             Err(error) => {
-                self.release(generation);
+                self.release();
                 self.publish(NodeStatus {
                     state: NodeState::BinaryMissing,
                     detail: Some(error.to_string()),
@@ -224,54 +236,49 @@ impl Supervisor {
         self.publish(status.clone());
 
         let supervisor = self.clone();
-        let task = tauri::async_runtime::spawn(async move {
-            supervisor
-                .supervise(binary, settings, generation, receiver)
-                .await;
+        tauri::async_runtime::spawn(async move {
+            supervisor.supervise(binary, settings, claim).await;
         });
-        self.inner.lock().expect("supervisor poisoned").task = Some(task);
         Ok(status)
     }
 
-    /// Frees the run slot, unless a later start already claimed it.
-    fn release(&self, generation: u64) {
-        let mut inner = self.inner.lock().expect("supervisor poisoned");
-        if inner.generation == generation {
-            inner.stop = None;
-            inner.task = None;
+    /// Frees the run slot, and installs the status a stop asked to leave.
+    fn release(&self) {
+        let blocked = {
+            let mut inner = self.inner.lock().expect("supervisor poisoned");
+            let blocked = inner.slot.release();
+            if let Some(status) = &blocked {
+                inner.started = None;
+                inner.status = status.clone();
+            }
+            blocked
+        };
+        if let Some(status) = blocked {
+            self.announce(status);
         }
     }
 
-    /// Signals the run loop and waits for the child to be gone.
+    /// Signals the run loop and waits for the child to be gone. Every caller
+    /// waits for the same end, so a quit during a stop cannot overtake it.
     pub async fn stop(&self) -> NodeStatus {
-        let (sender, task) = {
-            let mut inner = self.inner.lock().expect("supervisor poisoned");
-            (inner.stop.take(), inner.task.take())
-        };
-        if let Some(sender) = sender {
-            let _ = sender.send(());
-        }
-        if let Some(task) = task {
-            let _ = task.await;
+        let done = self
+            .inner
+            .lock()
+            .expect("supervisor poisoned")
+            .slot
+            .request_stop(None);
+        if let Some(mut done) = done {
+            let _ = done.changed().await;
         }
         self.status()
     }
 
-    pub async fn restart(&self) -> Result<NodeStatus, DesktopError> {
-        self.stop().await;
-        self.start()
-    }
-
-    async fn supervise(
-        self,
-        binary: PathBuf,
-        settings: NodeSettings,
-        generation: u64,
-        stop: oneshot::Receiver<()>,
-    ) {
+    async fn supervise(self, binary: PathBuf, settings: NodeSettings, claim: Claim) {
+        let Claim { stop, done } = claim;
         self.run(&binary, &settings, stop).await;
         // However the loop ended, the next start has to be able to claim it.
-        self.release(generation);
+        self.release();
+        drop(done);
     }
 
     async fn run(&self, binary: &Path, settings: &NodeSettings, mut stop: oneshot::Receiver<()>) {
@@ -552,6 +559,19 @@ fn transition(status: &NodeStatus, ready: bool) -> Option<NodeStatus> {
         ready,
         ..status.clone()
     })
+}
+
+fn update_status(required: UpdateRequired) -> NodeStatus {
+    let detail = format!(
+        "the realm runs aruna {} but this app bundles {}. Update the app or set this device up again.",
+        required.realm, required.local
+    );
+    NodeStatus {
+        state: NodeState::Stopped,
+        detail: Some(detail),
+        update_required: Some(required),
+        ..NodeStatus::default()
+    }
 }
 
 fn describe_exit(code: Option<i32>) -> String {
