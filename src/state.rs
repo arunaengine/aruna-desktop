@@ -83,6 +83,20 @@ impl AppState {
         Ok(())
     }
 
+    /// Keeps the realm's reported version with the settings, so it outlives
+    /// the launch. Nothing is written while it is unchanged.
+    pub fn note_version(&self, version: &str) -> Result<(), DesktopError> {
+        let mut settings = self.settings.lock().expect("settings poisoned");
+        if settings.realm_version.as_deref() == Some(version) {
+            return Ok(());
+        }
+        let mut changed = settings.clone();
+        changed.realm_version = Some(version.to_string());
+        changed.save(&self.settings_path)?;
+        *settings = changed;
+        Ok(())
+    }
+
     pub fn progress(&self) -> EnrollProgress {
         self.enroll
             .lock()

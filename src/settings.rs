@@ -168,6 +168,9 @@ pub struct NodeSettings {
     /// The API base that realm resolved to; a deployment may serve portal and
     /// API on separate listeners, so it cannot be derived from the origin.
     pub realm_api_url: Option<String>,
+    /// The aruna version that realm last reported. A mismatch stays known when
+    /// the realm cannot be reached, so an offline start does not run it.
+    pub realm_version: Option<String>,
     /// Set once the realm has listed this node.
     pub enrolled: bool,
     /// Escape hatch for node keys the desktop does not model yet.
@@ -191,6 +194,7 @@ impl Default for NodeSettings {
             realm: None,
             realm_url: None,
             realm_api_url: None,
+            realm_version: None,
             enrolled: false,
             extra_env: BTreeMap::new(),
         }
@@ -284,6 +288,7 @@ impl NodeSettings {
         self.onboarding_secret = None;
         self.seed_url = None;
         self.realm = None;
+        self.realm_version = None;
         self.device_label = None;
         self.enrolled = false;
         self.paused = false;
@@ -292,6 +297,9 @@ impl NodeSettings {
 
     /// Remembers the realm the portal window opens and where its API answers.
     pub fn remember_realm(&mut self, url: &str, api: &str) {
+        if self.realm_url.as_deref() != Some(url) {
+            self.realm_version = None;
+        }
         self.realm_url = Some(url.to_string());
         self.realm_api_url = Some(api.to_string());
     }
@@ -887,8 +895,10 @@ mod tests {
         settings.remember_realm("https://aruna.example", "https://aruna.example/api/v1");
         settings.enroll("s1".into(), Some("https://seed.example".into()), None);
         settings.joined(Some("r-1".into()));
+        settings.realm_version = Some("3.0.0-alpha.1".into());
 
         settings.wipe();
+        assert!(settings.realm_version.is_none());
         assert!(!settings.enrolled);
         assert!(settings.realm.is_none());
         assert!(settings.seed_url.is_none());
@@ -897,6 +907,20 @@ mod tests {
         assert!(!settings.paused);
         assert_eq!(settings.realm_url.as_deref(), Some("https://aruna.example"));
         assert_eq!(settings.binary_path, Some(PathBuf::from("/opt/aruna")));
+    }
+
+    #[test]
+    fn forgets_version_of_other_realm() {
+        let mut settings = NodeSettings::default();
+        settings.remember_realm("https://aruna.example", "https://aruna.example/api/v1");
+        settings.realm_version = Some("3.0.0-alpha.1".into());
+
+        // Asking again about the same realm keeps what it last said.
+        settings.remember_realm("https://aruna.example", "https://aruna.example/api/v1");
+        assert_eq!(settings.realm_version.as_deref(), Some("3.0.0-alpha.1"));
+
+        settings.remember_realm("https://other.example", "https://other.example/api/v1");
+        assert!(settings.realm_version.is_none());
     }
 
     #[test]

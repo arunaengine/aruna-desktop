@@ -194,7 +194,8 @@ pub async fn node_settings_set(
             state.supervisor.stop().await;
         }
         _ if moved && live => {
-            if let Err(error) = state.supervisor.restart().await {
+            state.supervisor.stop().await;
+            if let Err(error) = start_node(&state).await {
                 tracing::warn!(%error, "Could not restart the node");
             }
         }
@@ -286,7 +287,8 @@ pub async fn arm(
             .accept(link.seed.as_deref(), link.realm.as_deref());
         tracker.cursor = 0;
     }
-    state.supervisor.restart().await?;
+    state.supervisor.stop().await;
+    start_node(&state).await?;
     shell::sync(app);
 
     Ok(EnrollResult {
@@ -457,10 +459,11 @@ pub fn api_base(settings: &NodeSettings) -> String {
 
 pub(crate) async fn start_node(state: &AppState) -> Result<NodeStatus, DesktopError> {
     let settings = state.settings();
-    if let Some(realm_url) = realm_to_check(&settings)
-        && let Ok(Ok(target)) =
-            tokio::time::timeout(REALM_PROBE_TIMEOUT, realm::check(&state.http, realm_url)).await
-    {
+    let Some(realm_url) = realm_to_check(&settings) else {
+        return state.supervisor.start();
+    };
+    let target = check_realm(state, realm_url).await;
+    if let Some(target) = &target {
         if settings.enrolled
             && let Some((expected, actual)) =
                 realm_mismatch(settings.realm.as_deref(), target.realm.as_deref())
@@ -471,11 +474,28 @@ pub(crate) async fn start_node(state: &AppState) -> Result<NodeStatus, DesktopEr
                 realm_url: realm_url.to_string(),
             }));
         }
-        if let Some(required) = version_gap(target.api_version.as_deref()) {
-            return Ok(state.supervisor.record_update_required(required));
-        }
+        remember_version(state, target.api_version.as_deref());
     }
-    state.supervisor.start()
+    let seen = target.and_then(|target| target.api_version);
+    match version_gap(seen.as_deref(), settings.realm_version.as_deref()) {
+        Some(required) => Ok(state.supervisor.record_update_required(required)),
+        None => state.supervisor.start(),
+    }
+}
+
+async fn check_realm(state: &AppState, realm_url: &str) -> Option<RealmTarget> {
+    tokio::time::timeout(REALM_PROBE_TIMEOUT, realm::check(&state.http, realm_url))
+        .await
+        .ok()?
+        .ok()
+}
+
+fn remember_version(state: &AppState, version: Option<&str>) {
+    if let Some(version) = version
+        && let Err(error) = state.note_version(version)
+    {
+        tracing::warn!(%error, "Could not store the realm version");
+    }
 }
 
 /// The realm a node start must agree with: only a device that joined, or is
@@ -486,9 +506,11 @@ fn realm_to_check(settings: &NodeSettings) -> Option<&str> {
         .flatten()
 }
 
-/// Present when the realm names an aruna version other than the bundled node's.
-fn version_gap(realm: Option<&str>) -> Option<UpdateRequired> {
-    let realm = realm?;
+/// Present when the realm runs another aruna version than the bundled node's.
+/// What the realm just said wins; when it could not be asked, the version it
+/// last reported stands, so going offline never clears a known mismatch.
+fn version_gap(seen: Option<&str>, last: Option<&str>) -> Option<UpdateRequired> {
+    let realm = seen.or(last)?;
     (realm != env!("CARGO_PKG_VERSION")).then(|| UpdateRequired {
         local: env!("CARGO_PKG_VERSION").to_string(),
         realm: realm.to_string(),
@@ -509,15 +531,13 @@ pub(crate) async fn watch_version(app: AppHandle) {
         let Some(realm_url) = realm_to_check(&settings).filter(|_| live) else {
             continue;
         };
-        let Ok(Ok(target)) =
-            tokio::time::timeout(REALM_PROBE_TIMEOUT, realm::check(&state.http, realm_url)).await
-        else {
+        let Some(target) = check_realm(&state, realm_url).await else {
             continue;
         };
-        if let Some(required) = version_gap(target.api_version.as_deref()) {
+        remember_version(&state, target.api_version.as_deref());
+        if let Some(required) = version_gap(target.api_version.as_deref(), None) {
             tracing::warn!(realm = %required.realm, "The realm runs another aruna version");
-            state.supervisor.stop().await;
-            state.supervisor.record_update_required(required);
+            state.supervisor.stop_for_update(required).await;
             shell::sync(&app);
         }
     }
@@ -698,15 +718,23 @@ mod tests {
     #[test]
     fn detects_version_gap() {
         let local = env!("CARGO_PKG_VERSION");
-        assert_eq!(version_gap(Some(local)), None);
-        assert_eq!(version_gap(None), None);
-        assert_eq!(
-            version_gap(Some("3.0.0-alpha.1")),
-            Some(UpdateRequired {
-                local: local.into(),
-                realm: "3.0.0-alpha.1".into()
-            })
-        );
+        let older = Some("3.0.0-alpha.1");
+        let gap = Some(UpdateRequired {
+            local: local.into(),
+            realm: "3.0.0-alpha.1".into(),
+        });
+        assert_eq!(version_gap(Some(local), None), None);
+        assert_eq!(version_gap(None, None), None);
+        assert_eq!(version_gap(older, None), gap);
+
+        // Offline, the last report stands: a mismatch stays blocked, a match
+        // keeps the device usable.
+        assert_eq!(version_gap(None, older), gap);
+        assert_eq!(version_gap(None, Some(local)), None);
+
+        // What the realm says now replaces the last report in both directions.
+        assert_eq!(version_gap(Some(local), older), None);
+        assert_eq!(version_gap(older, Some(local)), gap);
     }
 
     #[test]
