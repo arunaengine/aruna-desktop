@@ -444,7 +444,10 @@ impl Supervisor {
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .kill_on_drop(true);
+            .kill_on_drop(true)
+            .env("PATH", compute::tool_path());
+        #[cfg(windows)]
+        command.creation_flags(compute::CREATE_NO_WINDOW);
         // The compute profile is written key by key, so an inherited one would
         // survive in the keys this start does not write: drop them all first.
         for (key, _) in std::env::vars_os() {

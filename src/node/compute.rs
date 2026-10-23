@@ -1,6 +1,7 @@
 //! What this machine can actually run a job in. The owner picks a backend, the
 //! shell asks the machine whether it has one, and the node is told the answer.
 
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
@@ -13,6 +14,10 @@ use crate::settings::ComputeBackend;
 /// A probe answers from a local daemon or not at all; a slow answer is treated
 /// as no answer, because the node start waits on it.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// Keeps a probe from flashing a console window on Windows.
+#[cfg(windows)]
+pub const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 /// Where a delegated cgroup v2 tree is mounted.
 const CGROUP_MOUNT: &str = "/sys/fs/cgroup";
@@ -72,6 +77,8 @@ pub struct ApptainerProbe {
 pub struct ComputePlan {
     pub executor: Option<Executor>,
     pub cgroup_root: Option<String>,
+    /// The daemon address found on this machine, handed to docker clients.
+    pub docker_host: Option<String>,
     /// Why the owner's choice was dropped, for the desktop log.
     pub note: Option<&'static str>,
 }
@@ -109,6 +116,10 @@ pub fn plan(backend: ComputeBackend, probe: &ComputeProbe) -> ComputePlan {
             Some(Executor::Apptainer) => probe.apptainer.cgroup_root.clone(),
             _ => None,
         },
+        docker_host: match executor {
+            Some(Executor::Docker) => probe.docker.socket.clone(),
+            _ => None,
+        },
         note: match (backend, executor) {
             (ComputeBackend::Apptainer, None) => Some(NO_SLICE),
             (ComputeBackend::Auto, None) => Some(NO_BACKEND),
@@ -123,7 +134,14 @@ pub fn plan(backend: ComputeBackend, probe: &ComputeProbe) -> ComputePlan {
 /// nothing at all.
 pub async fn detect(backend: ComputeBackend) -> ComputePlan {
     let seen = match backend {
-        ComputeBackend::Off | ComputeBackend::Docker => ComputeProbe::default(),
+        ComputeBackend::Off => ComputeProbe::default(),
+        ComputeBackend::Docker => ComputeProbe {
+            docker: DockerProbe {
+                socket: docker_socket(),
+                ..DockerProbe::default()
+            },
+            ..ComputeProbe::default()
+        },
         ComputeBackend::Apptainer => ComputeProbe {
             apptainer: apptainer_probe().await,
             ..ComputeProbe::default()
@@ -134,19 +152,24 @@ pub async fn detect(backend: ComputeBackend) -> ComputePlan {
 }
 
 async fn docker_probe() -> DockerProbe {
-    let version = run("docker", &["version", "--format", "{{.Server.Version}}"])
-        .await
-        .as_deref()
-        .and_then(version);
+    let socket = docker_socket();
+    let version = run(
+        "docker",
+        &["version", "--format", "{{.Server.Version}}"],
+        socket.as_deref(),
+    )
+    .await
+    .as_deref()
+    .and_then(version);
     DockerProbe {
         available: version.is_some(),
         version,
-        socket: docker_socket(),
+        socket,
     }
 }
 
 async fn apptainer_probe() -> ApptainerProbe {
-    let version = run("apptainer", &["version"])
+    let version = run("apptainer", &["version"], None)
         .await
         .as_deref()
         .and_then(version);
@@ -161,12 +184,19 @@ async fn apptainer_probe() -> ApptainerProbe {
 
 /// Runs a probe command off the runtime's threads. Anything but a clean exit
 /// within the timeout answers `None`, including a binary that is not installed.
-async fn run(program: &str, args: &[&str]) -> Option<String> {
-    let output = Command::new(program)
+async fn run(program: &str, args: &[&str], docker_host: Option<&str>) -> Option<String> {
+    let mut command = Command::new(program);
+    command
         .args(args)
+        .env("PATH", tool_path())
         .stdin(Stdio::null())
-        .kill_on_drop(true)
-        .output();
+        .kill_on_drop(true);
+    if let Some(host) = docker_host {
+        command.env("DOCKER_HOST", host);
+    }
+    #[cfg(windows)]
+    command.creation_flags(CREATE_NO_WINDOW);
+    let output = command.output();
     match tokio::time::timeout(PROBE_TIMEOUT, output).await {
         Ok(Ok(output)) if output.status.success() => {
             Some(String::from_utf8_lossy(&output.stdout).into_owned())
@@ -194,14 +224,57 @@ fn docker_socket() -> Option<String> {
     if let Some(host) = std::env::var_os("DOCKER_HOST").filter(|host| !host.is_empty()) {
         return Some(host.to_string_lossy().into_owned());
     }
-    let rootless = std::env::var_os("XDG_RUNTIME_DIR")
-        .map(PathBuf::from)
-        .map(|dir| dir.join("docker.sock"));
-    [rootless, Some(PathBuf::from("/var/run/docker.sock"))]
+    let runtime = std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from);
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    socket_paths(runtime.as_deref(), home.as_deref())
         .into_iter()
-        .flatten()
         .find(|path| path.exists())
         .map(|path| format!("unix://{}", path.display()))
+}
+
+/// Where a docker daemon commonly listens: rootless and system installs, then
+/// the sockets of Docker Desktop, Colima and OrbStack in the owner's home.
+fn socket_paths(runtime: Option<&Path>, home: Option<&Path>) -> Vec<PathBuf> {
+    let mut paths: Vec<PathBuf> = runtime
+        .map(|dir| dir.join("docker.sock"))
+        .into_iter()
+        .collect();
+    paths.push(PathBuf::from("/var/run/docker.sock"));
+    if let Some(home) = home {
+        for relative in [
+            ".docker/run/docker.sock",
+            ".colima/default/docker.sock",
+            ".orbstack/run/docker.sock",
+        ] {
+            paths.push(home.join(relative));
+        }
+    }
+    paths
+}
+
+/// The tools' search path with the usual install places added. An app started
+/// from Finder or a launcher gets a minimal one that misses them.
+pub fn tool_path() -> OsString {
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    extend_path(std::env::var_os("PATH"), home.as_deref())
+}
+
+fn extend_path(path: Option<OsString>, home: Option<&Path>) -> OsString {
+    let mut dirs: Vec<PathBuf> = path
+        .as_deref()
+        .map(|path| std::env::split_paths(path).collect())
+        .unwrap_or_default();
+    let mut usual = vec![
+        PathBuf::from("/usr/local/bin"),
+        PathBuf::from("/opt/homebrew/bin"),
+    ];
+    usual.extend(home.map(|home| home.join(".docker/bin")));
+    for dir in usual {
+        if dir.is_dir() && !dirs.contains(&dir) {
+            dirs.push(dir);
+        }
+    }
+    std::env::join_paths(dirs).unwrap_or_default()
 }
 
 /// The delegated cgroup slice of this login session, when systemd handed one
@@ -324,6 +397,35 @@ mod tests {
             plan(ComputeBackend::Docker, &seen(true, true))
                 .cgroup_root
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn lists_docker_sockets() {
+        let paths = socket_paths(
+            Some(Path::new("/run/user/1000")),
+            Some(Path::new("/Users/me")),
+        );
+        assert_eq!(paths[0], Path::new("/run/user/1000/docker.sock"));
+        assert!(paths.contains(&PathBuf::from("/Users/me/.colima/default/docker.sock")));
+        assert!(paths.contains(&PathBuf::from("/Users/me/.orbstack/run/docker.sock")));
+        assert_eq!(
+            socket_paths(None, None),
+            [PathBuf::from("/var/run/docker.sock")]
+        );
+    }
+
+    #[test]
+    fn keeps_existing_path() {
+        // Directories already on the path stay where they are, once.
+        let kept = extend_path(Some(OsString::from("/a:/usr/local/bin")), None);
+        let dirs: Vec<PathBuf> = std::env::split_paths(&kept).collect();
+        assert_eq!(dirs[0], Path::new("/a"));
+        assert_eq!(
+            dirs.iter()
+                .filter(|dir| dir.as_path() == Path::new("/usr/local/bin"))
+                .count(),
+            1
         );
     }
 

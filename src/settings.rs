@@ -441,6 +441,9 @@ impl NodeSettings {
         if self.compute.keep_failed {
             pairs.push(("ARUNA_COMPUTE_KEEP_FAILED".to_string(), "1".to_string()));
         }
+        if let Some(host) = &compute.docker_host {
+            pairs.push(("DOCKER_HOST".to_string(), host.clone()));
+        }
         if let Some(root) = &compute.cgroup_root {
             pairs.push((
                 "ARUNA_COMPUTE_APPTAINER_CGROUP_ROOT".to_string(),
@@ -744,6 +747,21 @@ mod tests {
             ..settings
         };
         assert!(!planned(&unbounded, &plan).contains_key("ARUNA_COMPUTE_MAX_CONCURRENT"));
+    }
+
+    #[test]
+    fn passes_docker_host() {
+        let plan = ComputePlan {
+            executor: Some(Executor::Docker),
+            docker_host: Some("unix:///Users/me/.colima/default/docker.sock".into()),
+            ..ComputePlan::default()
+        };
+        let map = planned(&NodeSettings::default(), &plan);
+        assert_eq!(
+            map["DOCKER_HOST"],
+            "unix:///Users/me/.colima/default/docker.sock"
+        );
+        assert!(!pairs(&NodeSettings::default()).contains_key("DOCKER_HOST"));
     }
 
     #[test]
