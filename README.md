@@ -211,7 +211,8 @@ Notes on the ones that do more than they say:
   cannot make itself: no provider accepts the app window's origin for
   cross-origin requests. `oidc_discovery` fetches an `https` URL, or `http` on a
   loopback host, whose path ends with `/.well-known/openid-configuration`, and
-  remembers the `token_endpoint` it names if that passes the same scheme check.
+  remembers the `token_endpoint` it names: an `https` one off this machine, or
+  a loopback one on the discovery URL's own origin.
   `oidc_token` posts `form` as `application/x-www-form-urlencoded`, and only to
   an endpoint remembered that way in this run, so the shell is no general proxy.
   Neither follows redirects, both give up after 15 seconds, and the form and

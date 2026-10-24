@@ -45,7 +45,7 @@ impl OidcClient {
         let url = discovery_url(raw)?;
         let response = self
             .client
-            .get(url)
+            .get(url.clone())
             .send()
             .await
             .map_err(|error| unreachable(&error))?;
@@ -59,7 +59,7 @@ impl OidcClient {
         let document = response.json::<Document>().await.map_err(|_| {
             DesktopError::Unreachable(format!("{origin} answered with no discovery document"))
         })?;
-        self.remember(&document);
+        self.remember(&url, &document);
         Ok(document)
     }
 
@@ -94,11 +94,17 @@ impl OidcClient {
     }
 
     /// Keeps the token endpoint a document names, if the shell may post to it.
-    fn remember(&self, document: &Document) {
+    /// A loopback one counts only on the discovery URL's own origin, so a remote
+    /// provider cannot point the shell at a local service.
+    fn remember(&self, discovery: &Url, document: &Document) {
         let Some(endpoint) = document.get("token_endpoint").and_then(Value::as_str) else {
             return;
         };
-        if provider_url(endpoint).is_ok() {
+        let usable = provider_url(endpoint).is_ok_and(|token| match loopback(&token) {
+            true => token.origin() == discovery.origin(),
+            false => token.scheme() == "https",
+        });
+        if usable {
             self.endpoints
                 .lock()
                 .expect("token endpoints poisoned")
@@ -126,18 +132,21 @@ impl OidcClient {
 fn provider_url(raw: &str) -> Result<Url, DesktopError> {
     let url =
         Url::parse(raw).map_err(|error| DesktopError::Link(format!("unreadable URL: {error}")))?;
-    let loopback = match url.host() {
+    match url.scheme() {
+        "https" => Ok(url),
+        "http" if loopback(&url) => Ok(url),
+        _ => Err(DesktopError::Link(
+            "a provider is reached over https, or over http on this machine only".into(),
+        )),
+    }
+}
+
+fn loopback(url: &Url) -> bool {
+    match url.host() {
         Some(Host::Domain(name)) => name == "localhost",
         Some(Host::Ipv4(ip)) => ip.is_loopback(),
         Some(Host::Ipv6(ip)) => ip.is_loopback(),
         None => false,
-    };
-    match url.scheme() {
-        "https" => Ok(url),
-        "http" if loopback => Ok(url),
-        _ => Err(DesktopError::Link(
-            "a provider is reached over https, or over http on this machine only".into(),
-        )),
     }
 }
 
@@ -221,17 +230,49 @@ mod tests {
         let endpoint = "https://idp.example/realms/aruna/protocol/openid-connect/token";
         assert!(client.allowed(endpoint).is_err());
 
-        client.remember(&document(json!({
-            "issuer": "https://idp.example/realms/aruna",
-            "token_endpoint": endpoint,
-        })));
+        let remote =
+            discovery_url("https://idp.example/realms/aruna/.well-known/openid-configuration")
+                .expect("a discovery address");
+        client.remember(
+            &remote,
+            &document(json!({
+                "issuer": "https://idp.example/realms/aruna",
+                "token_endpoint": endpoint,
+            })),
+        );
         assert!(client.allowed(endpoint).is_ok());
         assert!(client.allowed("https://idp.example/other").is_err());
 
-        // A document cannot point the shell at plain http off this machine.
-        let lan = "http://192.168.1.1/token";
-        client.remember(&document(json!({ "token_endpoint": lan })));
-        assert!(client.allowed(lan).is_err());
+        // A remote document can name neither plain http nor a service on this machine.
+        for token in [
+            "http://192.168.1.1/token",
+            "http://127.0.0.1:8080/token",
+            "https://localhost/token",
+            "https://[::1]:8443/token",
+        ] {
+            client.remember(&remote, &document(json!({ "token_endpoint": token })));
+            assert!(client.allowed(token).is_err(), "{token}");
+        }
+    }
+
+    #[test]
+    fn keeps_local_origin() {
+        // A dev provider on this machine may name a token endpoint on its own origin only.
+        let client = OidcClient::new().expect("an HTTP client");
+        let local =
+            discovery_url("http://127.0.0.1:8080/realms/dev/.well-known/openid-configuration")
+                .expect("a discovery address");
+        let own = "http://127.0.0.1:8080/realms/dev/protocol/openid-connect/token";
+        client.remember(&local, &document(json!({ "token_endpoint": own })));
+        assert!(client.allowed(own).is_ok());
+
+        for token in ["http://127.0.0.1:9000/token", "http://localhost:8080/token"] {
+            client.remember(&local, &document(json!({ "token_endpoint": token })));
+            assert!(client.allowed(token).is_err(), "{token}");
+        }
+        let remote = "https://idp.example/token";
+        client.remember(&local, &document(json!({ "token_endpoint": remote })));
+        assert!(client.allowed(remote).is_ok());
     }
 
     #[test]
