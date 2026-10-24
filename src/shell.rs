@@ -239,6 +239,26 @@ mod tests {
     }
 
     #[test]
+    fn follows_the_site() {
+        // A link's website is the callback; without one, the seed origin still is.
+        let mut bare = NodeSettings::default();
+        bare.enroll("s1".into(), Some("https://api.seed.example".into()), None);
+        assert_eq!(
+            context(&bare, false).auth_callback_origin.as_deref(),
+            Some("https://api.seed.example")
+        );
+
+        let mut linked = bare.clone();
+        linked.remember_site("https://portal.example", "https://api.seed.example");
+        let linked = context(&linked, false);
+        assert_eq!(
+            linked.auth_callback_origin.as_deref(),
+            Some("https://portal.example")
+        );
+        assert_eq!(linked.api_base_url, "https://api.seed.example/api/v1");
+    }
+
+    #[test]
     fn offers_the_local_callback() {
         // A known realm wins; without one, only a served local portal is a callback.
         let settings = NodeSettings {

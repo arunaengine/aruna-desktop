@@ -278,6 +278,9 @@ pub async fn arm(
 
     let mut settings = state.settings();
     settings.enroll(link.secret, link.seed.clone(), link.realm.clone());
+    if let (Some(site), Some(seed)) = (link.site.as_deref(), link.seed.as_deref()) {
+        settings.remember_site(site, seed);
+    }
     settings.device_label = label.filter(|label| !label.is_empty());
     // Enrolling is an explicit "run this node", so it lifts a pause.
     settings.paused = false;

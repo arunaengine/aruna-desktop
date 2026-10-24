@@ -323,6 +323,15 @@ impl NodeSettings {
         self.realm_api_url = Some(api.to_string());
     }
 
+    /// Remembers the realm website an enrollment link named. The website serves
+    /// no API, so the seed's stays the one the portal talks to.
+    pub fn remember_site(&mut self, site: &str, seed: &str) {
+        if self.realm_url.as_deref() != Some(site) {
+            let api = format!("{}/api/v1", seed.trim_end_matches('/'));
+            self.remember_realm(site, &api, None);
+        }
+    }
+
     /// Makes every start and probe that began before this call out of date.
     pub fn invalidate(&mut self) {
         self.generation = self.generation.wrapping_add(1);
@@ -615,6 +624,39 @@ mod tests {
         assert_eq!(map["S3_ADDRESS"], "");
         assert_eq!(map["S3_HOST"], "");
         assert!(!map.contains_key("S3_PUBLIC_URL"));
+    }
+
+    #[test]
+    fn prefers_the_site() {
+        // The website wins over the seed origin, and the API stays the seed's.
+        let mut settings = NodeSettings::default();
+        settings.enroll("s1".into(), Some("https://api.seed.example".into()), None);
+        settings.remember_site("https://portal.example", "https://api.seed.example");
+        assert_eq!(
+            settings.realm_url.as_deref(),
+            Some("https://portal.example")
+        );
+        assert_eq!(
+            settings.realm_api_url.as_deref(),
+            Some("https://api.seed.example/api/v1")
+        );
+        assert_eq!(
+            settings.seed_url.as_deref(),
+            Some("https://api.seed.example")
+        );
+
+        // A website already remembered keeps the API it resolved to.
+        let mut connected = NodeSettings::default();
+        connected.remember_realm(
+            "https://portal.example",
+            "https://api.other.example/api/v1",
+            None,
+        );
+        connected.remember_site("https://portal.example", "https://api.seed.example");
+        assert_eq!(
+            connected.realm_api_url.as_deref(),
+            Some("https://api.other.example/api/v1")
+        );
     }
 
     #[test]

@@ -557,11 +557,14 @@ dropped with a warning that names the route only, never the query.
 
 | Link | Behaviour |
 | --- | --- |
-| `aruna://enroll?secret=…&seed=…&realm=…` | the enrollment is armed, `navigate` asks for `/app/device`, and `enroll-invite` is emitted |
+| `aruna://enroll?secret=…&seed=…&realm=…&site=…` | the enrollment is armed, `navigate` asks for `/app/device`, and `enroll-invite` is emitted |
 | `aruna://auth/callback?…` | `navigate` asks for `/auth/callback` with the query **and** the fragment the provider returned |
 
 `secret` and `seed` are required in a link, and `seed` must be an `http`/`https`
-origin; a link missing either is dropped. The owner already accepted the
+origin; a link missing either is dropped. The optional `site` is the origin of
+the realm website that showed the link. It is remembered as the realm URL, so
+it becomes `authCallbackOrigin`, while the seed's `/api/v1` stays the API the
+portal talks to; a `site` that is no web origin is ignored. The owner already accepted the
 invitation by following it out of the portal, so the shell arms it rather than
 stashing it for a second confirmation.
 

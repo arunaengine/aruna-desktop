@@ -4,6 +4,7 @@ use url::Url;
 
 use crate::bridge;
 use crate::error::DesktopError;
+use crate::realm;
 use crate::state::AppState;
 use crate::windows;
 
@@ -31,6 +32,9 @@ pub struct EnrollLink {
     /// desktop keeps this one only to watch the join.
     pub seed: Option<String>,
     pub realm: Option<String>,
+    /// The origin of the realm website that showed the link. It serves the
+    /// portal and the sign-in callback; the seed serves the API.
+    pub site: Option<String>,
 }
 
 /// What the portal is told about an invitation the app followed. The secret is
@@ -87,6 +91,7 @@ impl EnrollLink {
             secret,
             seed,
             realm: realm.as_deref().and_then(non_empty),
+            site: None,
         })
     }
 }
@@ -166,17 +171,20 @@ fn apply_enroll(app: &AppHandle, url: &Url) {
     });
 }
 
-/// Reads `aruna://enroll?secret=…&seed=…&realm=…`. The secret and the seed are
-/// required; the realm is a label the seed can also report.
+/// Reads `aruna://enroll?secret=…&seed=…&realm=…&site=…`. The secret and the
+/// seed are required; the realm is a label the seed can also report, and a site
+/// that is no web origin is dropped.
 pub fn parse_enroll(url: &Url) -> Result<EnrollLink, DesktopError> {
     let mut secret = None;
     let mut seed = None;
     let mut realm = None;
+    let mut site = None;
     for (key, value) in url.query_pairs() {
         match key.as_ref() {
             "secret" => secret = non_empty(&value),
             "seed" => seed = non_empty(&value),
             "realm" => realm = non_empty(&value),
+            "site" => site = realm::normalize(&value).ok(),
             _ => {}
         }
     }
@@ -187,6 +195,7 @@ pub fn parse_enroll(url: &Url) -> Result<EnrollLink, DesktopError> {
         secret,
         seed: Some(seed_base(&seed)?),
         realm,
+        site,
     })
 }
 
@@ -277,6 +286,39 @@ mod tests {
         let link = enroll("aruna://enroll?secret=s&seed=https%3A%2F%2Fh.example%2Faruna%2F")
             .expect("a complete link");
         assert_eq!(link.seed.as_deref(), Some("https://h.example/aruna"));
+    }
+
+    #[test]
+    fn reads_enroll_site() {
+        // The website the link was shown on is kept as its origin, beside the seed.
+        let seed = "seed=https%3A%2F%2Fapi.seed.example";
+        let link = enroll(&format!(
+            "aruna://enroll?secret=s&{seed}&site=https%3A%2F%2Fportal.example%2Fapp%2F"
+        ))
+        .expect("a complete link");
+        assert_eq!(link.site.as_deref(), Some("https://portal.example"));
+        assert_eq!(link.seed.as_deref(), Some("https://api.seed.example"));
+
+        let bare = enroll(&format!("aruna://enroll?secret=s&{seed}")).expect("a complete link");
+        assert!(bare.site.is_none());
+    }
+
+    #[test]
+    fn ignores_invalid_site() {
+        // A site is optional, so one that is no web origin is dropped, not refused.
+        for site in [
+            "ftp%3A%2F%2Fportal.example",
+            "https%3A%2F%2F",
+            "https%3A%2F%2Fuser%3Apw%40portal.example",
+            "javascript%3Aalert(1)",
+            "%20",
+        ] {
+            let link = enroll(&format!(
+                "aruna://enroll?secret=s&seed=https%3A%2F%2Fapi.seed.example&site={site}"
+            ))
+            .expect("a link with an unusable site");
+            assert!(link.site.is_none(), "{site}");
+        }
     }
 
     #[test]
