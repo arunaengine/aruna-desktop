@@ -123,7 +123,7 @@ reports as a missing bridge half rather than a failed call.
 | `node_settings_get` | – | `{storagePath, compute, s3Enabled, paused}` |
 | `node_settings_set` | `{settings}` (any subset) | the stored settings |
 | `compute_probe` | – | `{docker: {available, version, socket}, apptainer: {available, version, cgroupOk, cgroupRoot}}` |
-| `enroll_apply` | `{secret, seedUrl?, realm?, label?}` | `{nodeId, realm}` |
+| `enroll_apply` | `{secret, seedUrl?, realm?, site?, label?}` | `{nodeId, realm}` |
 | `wipe_device` | `{confirm}` | – |
 | `pick_directory` | `{title?, startPath?}` | the chosen path, or `null` |
 | `reveal_path` | `{path}` | – |
@@ -565,7 +565,8 @@ dropped with a warning that names the route only, never the query.
 origin; a link missing either is dropped. The optional `site` is the origin of
 the realm website that showed the link. It is remembered as the realm URL, so
 it becomes `authCallbackOrigin`, while the seed's `/api/v1` stays the API the
-portal talks to; a `site` that is no web origin is ignored. The owner already accepted the
+portal talks to; a `site` that is no web origin is ignored. `enroll_apply`
+takes the same `site` for a pasted link. The owner already accepted the
 invitation by following it out of the portal, so the shell arms it rather than
 stashing it for a second confirmation.
 

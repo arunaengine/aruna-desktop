@@ -260,9 +260,11 @@ pub async fn enroll_apply(
     secret: String,
     seed_url: Option<String>,
     realm: Option<String>,
+    site: Option<String>,
     label: Option<String>,
 ) -> Result<EnrollResult, DesktopError> {
-    arm(&app, EnrollLink::accept(secret, seed_url, realm)?, label).await
+    let link = EnrollLink::accept(secret, seed_url, realm, site)?;
+    arm(&app, link, label).await
 }
 
 /// Stores a one-time secret and restarts the node, which consumes it while it

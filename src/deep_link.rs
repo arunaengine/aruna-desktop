@@ -74,11 +74,13 @@ impl LastInvite {
 
 impl EnrollLink {
     /// Takes an enrollment the portal handed over. Only the secret is required;
-    /// a seed URL beside it has to be an absolute web address.
+    /// a seed URL beside it has to be an absolute web address, and a site that
+    /// is no web origin is dropped, as in a link.
     pub fn accept(
         secret: String,
         seed: Option<String>,
         realm: Option<String>,
+        site: Option<String>,
     ) -> Result<Self, DesktopError> {
         let secret = non_empty(&secret)
             .ok_or_else(|| DesktopError::DeepLink("the secret is empty".into()))?;
@@ -91,7 +93,7 @@ impl EnrollLink {
             secret,
             seed,
             realm: realm.as_deref().and_then(non_empty),
-            site: None,
+            site: site.and_then(|site| realm::normalize(&site).ok()),
         })
     }
 }
@@ -319,6 +321,30 @@ mod tests {
             .expect("a link with an unusable site");
             assert!(link.site.is_none(), "{site}");
         }
+    }
+
+    #[test]
+    fn paste_matches_link() {
+        // A pasted link and a followed one arm the same enrollment, site included.
+        let followed = enroll(
+            "aruna://enroll?secret=s1&seed=https%3A%2F%2Fapi.seed.example%2F&realm=r-1\
+             &site=https%3A%2F%2Fportal.example%2Fapp",
+        )
+        .expect("a complete link");
+        let pasted = EnrollLink::accept(
+            "s1".into(),
+            Some("https://api.seed.example/".into()),
+            Some("r-1".into()),
+            Some("https://portal.example/app".into()),
+        )
+        .expect("a complete enrollment");
+        assert_eq!(pasted, followed);
+        assert_eq!(pasted.site.as_deref(), Some("https://portal.example"));
+
+        let unusable =
+            EnrollLink::accept("s1".into(), None, None, Some("ftp://portal.example".into()))
+                .expect("a site is optional");
+        assert!(unusable.site.is_none());
     }
 
     #[test]
