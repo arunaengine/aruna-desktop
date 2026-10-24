@@ -2,6 +2,7 @@
 //! is one no provider accepts for cross-origin calls.
 
 use std::collections::{BTreeMap, HashSet};
+use std::net::Ipv4Addr;
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -142,15 +143,17 @@ fn provider_url(raw: &str) -> Result<Url, DesktopError> {
 }
 
 /// Whether a URL names this machine under any alias: every `.localhost` name
-/// (RFC 6761), also with a trailing dot, 127.0.0.0/8, `::1`, and IPv4 in IPv6.
+/// (RFC 6761), also with a trailing dot, 127.0.0.0/8, `::1`, the unspecified
+/// `0.0.0.0` and `::`, which reach local listeners, and IPv4 in IPv6.
 fn loopback(url: &Url) -> bool {
+    let local = |ip: Ipv4Addr| ip.is_loopback() || ip.is_unspecified();
     match url.host() {
         Some(Host::Domain(name)) => {
             let name = name.trim_end_matches('.');
             name == "localhost" || name.ends_with(".localhost")
         }
-        Some(Host::Ipv4(ip)) => ip.is_loopback(),
-        Some(Host::Ipv6(ip)) => ip.is_loopback() || ip.to_ipv4().is_some_and(|ip| ip.is_loopback()),
+        Some(Host::Ipv4(ip)) => local(ip),
+        Some(Host::Ipv6(ip)) => ip.is_loopback() || ip.to_ipv4().is_some_and(local),
         None => false,
     }
 }
@@ -292,6 +295,9 @@ mod tests {
             "https://[::1]/",
             "https://[::ffff:127.0.0.1]/",
             "https://[::127.0.0.1]/",
+            "https://0.0.0.0/",
+            "https://[::]/",
+            "https://[::ffff:0.0.0.0]/",
         ] {
             assert!(local(alias), "{alias}");
         }
@@ -321,6 +327,9 @@ mod tests {
             "127.1.2.3",
             "[::ffff:127.0.0.1]",
             "[::127.0.0.1]",
+            "0.0.0.0",
+            "[::]",
+            "[::ffff:0.0.0.0]",
         ] {
             let token = format!("https://{host}/token");
             client.remember(&remote, &document(json!({ "token_endpoint": token })));
