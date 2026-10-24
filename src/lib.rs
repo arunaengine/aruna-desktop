@@ -3,6 +3,7 @@ mod deep_link;
 mod enroll;
 mod error;
 mod node;
+mod oidc;
 mod realm;
 mod settings;
 mod shell;
@@ -58,6 +59,8 @@ pub fn run() {
             bridge::reveal_path,
             bridge::open_external,
             bridge::auth_open,
+            bridge::oidc_discovery,
+            bridge::oidc_token,
             bridge::validate_realm,
             bridge::enroll_invite_last,
             bridge::app_quit,

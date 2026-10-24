@@ -18,7 +18,7 @@ use crate::windows;
 
 /// The command set this shell implements. The portal pins it, so a shell that
 /// answers fewer commands must not claim this version.
-pub const BRIDGE_VERSION: u32 = 7;
+pub const BRIDGE_VERSION: u32 = 8;
 
 /// Emitted to the app window whenever what the portal must talk to has moved.
 /// It carries the whole context, in the shape the script injected.
@@ -268,7 +268,7 @@ mod tests {
         assert!(script.contains("\"realmUrl\":\"https://aruna.example\""));
         assert!(script.contains("\"systemBrowserAuth\":false"));
         assert!(script.contains("\"embeddedAuth\":true"));
-        assert!(script.contains("version: 7"));
+        assert!(script.contains("version: 8"));
         assert!(script.contains("Object.defineProperty(window, '__ARUNA_DESKTOP__'"));
         assert!(script.contains("Object.freeze(context)"));
     }

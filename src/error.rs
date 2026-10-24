@@ -16,6 +16,8 @@ pub enum DesktopError {
     Json(#[from] serde_json::Error),
     #[error(transparent)]
     Tauri(#[from] tauri::Error),
+    #[error(transparent)]
+    Http(#[from] reqwest::Error),
     #[error("invalid deep link: {0}")]
     DeepLink(String),
     #[error("invalid realm address: {0}")]
@@ -28,6 +30,9 @@ pub enum DesktopError {
     /// A request this device's own state does not allow. Shown as written.
     #[error("{0}")]
     Refused(String),
+    /// A provider refused a token request, with its own reason when it gave one.
+    #[error("the provider refused the token request (HTTP {status}): {reason}")]
+    Provider { status: u16, reason: String },
 }
 
 impl Serialize for DesktopError {

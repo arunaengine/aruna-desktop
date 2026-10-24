@@ -8,6 +8,7 @@ use crate::deep_link::LastInvite;
 use crate::enroll::{EnrollProgress, Tracker};
 use crate::error::DesktopError;
 use crate::node::Supervisor;
+use crate::oidc::OidcClient;
 use crate::settings::NodeSettings;
 use crate::shell::{self, ShellContext};
 
@@ -17,6 +18,8 @@ pub struct AppState {
     pub data_dir: PathBuf,
     pub supervisor: Supervisor,
     pub http: reqwest::Client,
+    /// Discovery and token requests the portal's own origin cannot make.
+    pub oidc: OidcClient,
     pub enroll: Mutex<Tracker>,
     /// The last `aruna://enroll` outcome, for a portal that missed its event.
     pub invite: LastInvite,
@@ -58,6 +61,7 @@ impl AppState {
             data_dir,
             supervisor,
             http: reqwest::Client::new(),
+            oidc: OidcClient::new()?,
             enroll: Mutex::new(tracker),
             invite: LastInvite::default(),
             shell: Mutex::new(context),

@@ -255,7 +255,7 @@ async fn get_json(client: &reqwest::Client, url: &str) -> Result<Value, Reach> {
 
 /// reqwest keeps its transport failures behind opaque sources, so the chain is
 /// read as text; the wording comes from hyper, rustls and `std::io`.
-fn chain(error: &reqwest::Error) -> Vec<String> {
+pub fn chain(error: &reqwest::Error) -> Vec<String> {
     let mut parts = vec![error.to_string()];
     let mut source = std::error::Error::source(error);
     while let Some(cause) = source {
@@ -265,7 +265,7 @@ fn chain(error: &reqwest::Error) -> Vec<String> {
     parts
 }
 
-fn classify(chain: &[String], timeout: bool) -> Reach {
+pub fn classify(chain: &[String], timeout: bool) -> Reach {
     if timeout {
         return Reach::Timeout;
     }

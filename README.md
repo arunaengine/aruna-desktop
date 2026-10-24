@@ -60,12 +60,12 @@ hosted portal.
   "apiBaseUrl": "http://127.0.0.1:34116/api/v1",
   "authCallbackOrigin": "https://aruna.example",  // the realm website's origin
   "features": { "desktop": true, "systemBrowserAuth": false, "embeddedAuth": true },
-  "bridge": { "invoke": "…", "version": 7 }
+  "bridge": { "invoke": "…", "version": 8 }
 }
 ```
 
 `version` is the command set below. A shell that answers fewer commands must not
-claim version 7.
+claim version 8.
 
 ### Which API the portal talks to
 
@@ -111,7 +111,7 @@ accepts.
 
 ## Commands
 
-Contract version 7. Arguments are a single object; answers are JSON. A name the
+Contract version 8. Arguments are a single object; answers are JSON. A name the
 shell does not implement is rejected with `unknown command: …`, which the portal
 reports as a missing bridge half rather than a failed call.
 
@@ -129,6 +129,8 @@ reports as a missing bridge half rather than a failed call.
 | `reveal_path` | `{path}` | – |
 | `open_external` | `{url}` | – |
 | `auth_open` | `{url}` | – |
+| `oidc_discovery` | `{url}` | the provider's discovery document |
+| `oidc_token` | `{endpoint, form}` | the provider's token response |
 | `validate_realm` | `{input}` | `{origin, realm, apiVersion, portal, redirectedFrom}` |
 | `enroll_invite_last` | – | the uncollected `enroll-invite` payload, or `null` |
 | `app_quit` | – | – |
@@ -205,6 +207,18 @@ Notes on the ones that do more than they say:
 * `auth_open` opens an `http` or `https` sign-in page in a window of the app's
   own, labelled `login`, and refuses every other scheme. See [Sign-in](#sign-in)
   for how that window comes back.
+* `oidc_discovery` and `oidc_token` make the two provider calls the portal
+  cannot make itself: no provider accepts the app window's origin for
+  cross-origin requests. `oidc_discovery` fetches an `https` URL, or `http` on a
+  loopback host, whose path ends with `/.well-known/openid-configuration`, and
+  remembers the `token_endpoint` it names if that passes the same scheme check.
+  `oidc_token` posts `form` as `application/x-www-form-urlencoded`, and only to
+  an endpoint remembered that way in this run, so the shell is no general proxy.
+  Neither follows redirects, both give up after 15 seconds, and the form and
+  the answer are never logged.
+  A refused token request fails with
+  `the provider refused the token request (HTTP {status}): {reason}`, the reason
+  being the provider's `error_description` or `error`.
 * `enroll_invite_last` answers with the last `enroll-invite` payload the shell
   emitted, in exactly the shape it was emitted, and never carries the secret. It
   is how a portal that subscribed after a cold-start link still sees it, so it

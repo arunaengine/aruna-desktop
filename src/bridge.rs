@@ -3,6 +3,7 @@
 //! the portal's `desktopBridge` module wraps exactly these commands, and one it
 //! does not get an answer for is reported as a missing shell half.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -18,6 +19,7 @@ use crate::enroll::{EnrollPhase, Observed};
 use crate::error::DesktopError;
 use crate::node::compute::ComputeProbe;
 use crate::node::{self, NodeInfo, NodeState, NodeStatus, RealmMismatch, UpdateRequired};
+use crate::oidc::Document;
 use crate::realm::{self, RealmTarget};
 use crate::settings::{LocalSettings, NodeSettings, SettingsPatch};
 use crate::shell::{self, ShellContext};
@@ -26,7 +28,7 @@ use crate::windows;
 
 /// Every command this shell answers. A name that is not here is rejected as
 /// unknown, which the portal reads as a bridge missing that half.
-pub const KNOWN: [&str; 15] = [
+pub const KNOWN: [&str; 17] = [
     "shell_context",
     "node_status",
     "node_logs_tail",
@@ -39,6 +41,8 @@ pub const KNOWN: [&str; 15] = [
     "reveal_path",
     "open_external",
     "auth_open",
+    "oidc_discovery",
+    "oidc_token",
     "validate_realm",
     "enroll_invite_last",
     "app_quit",
@@ -429,6 +433,28 @@ pub fn auth_open(app: AppHandle, url: String) -> Result<(), DesktopError> {
         .map_err(|error| DesktopError::Link(format!("unreadable URL: {error}")))?;
     windows::open_login(&app, target)?;
     Ok(())
+}
+
+/// Fetches a provider's discovery document, which the portal cannot fetch from
+/// the app's own origin. The token endpoint it names is what `oidc_token` may
+/// post to for the rest of this run.
+#[tauri::command]
+pub async fn oidc_discovery(
+    state: State<'_, AppState>,
+    url: String,
+) -> Result<Document, DesktopError> {
+    state.oidc.discover(&url).await
+}
+
+/// Posts the portal's token request form to an endpoint `oidc_discovery`
+/// returned in this run, and answers the provider's JSON.
+#[tauri::command]
+pub async fn oidc_token(
+    state: State<'_, AppState>,
+    endpoint: String,
+    form: BTreeMap<String, String>,
+) -> Result<Document, DesktopError> {
+    state.oidc.request_token(&endpoint, &form).await
 }
 
 /// Ends the app, stopping the node first: the portal owns no window and the
