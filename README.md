@@ -58,7 +58,7 @@ hosted portal.
 {
   "revision": 0,                                  // 0 is the injected one
   "apiBaseUrl": "http://127.0.0.1:34116/api/v1",
-  "authCallbackOrigin": "http://127.0.0.1:34115", // only with a local portal
+  "authCallbackOrigin": "https://aruna.example",  // the realm website's origin
   "features": { "desktop": true, "systemBrowserAuth": false, "embeddedAuth": true },
   "bridge": { "invoke": "…", "version": 7 }
 }
@@ -102,9 +102,11 @@ moves in the same instant can arrive in either order; the portal keeps the
 highest revision it has seen and drops anything that is not newer, including a
 `shell_context` answer that lost a race with an event.
 
-`authCallbackOrigin` is set only while the node serves its own portal listener,
-because that loopback origin is the only `http` redirect URI this device can
-register with a provider. See [Deep links](#deep-links) for what the app itself
+`authCallbackOrigin` is the origin (scheme, host, port) of the remembered realm
+URL, because the realm website's `/auth/callback` is the one redirect URI a
+provider registers. Without a remembered realm it is the node's own portal
+listener while that serves, and otherwise absent, so the portal falls back to
+`aruna://auth/callback`. See [Deep links](#deep-links) for what the app itself
 accepts.
 
 ## Commands
@@ -612,22 +614,18 @@ A node that cannot stay up fails the enrollment once the supervisor gives up.
 
 Sign-in stays inside the app (`embeddedAuth`): the portal hands the
 authorization URL to `auth_open`, which opens the provider's page in a window
-of the app's own. The provider still redirects to `aruna://auth/callback`; that
-navigation is intercepted before it loads, routed exactly like the deep link
-and landed on the portal's callback route in the app window, and the sign-in
-window closes on it. A sign-in window the owner closes instead emits
-`auth-cancelled`, so the portal drops the sign-in it was waiting on.
+of the app's own. The provider redirects that window to the realm website's
+`/auth/callback` under `authCallbackOrigin`, and the website moves a desktop
+sign-in on to `aruna://auth/callback` with the same query. That navigation is
+intercepted before it loads, whether a redirect or a page script starts it,
+routed exactly like the deep link and landed on the portal's callback route in
+the app window, and the sign-in window closes on it. A sign-in window the owner
+closes instead emits `auth-cancelled`, so the portal drops the sign-in it was
+waiting on.
 
-The redirect URI is unchanged from the system-browser flow, so no provider
-configuration moves, and an `aruna://auth/callback` link that arrives from the
-outside is still accepted. The `systemBrowserAuth` flag is what the shell
-switches off for this; a portal that reads neither flag falls back to
-navigating its own window.
-
-Which redirect URI a realm registers is still open, and it is a portal and
-provider decision rather than a shell one. The shell accepts the deep link
-whatever else is configured, and only claims the loopback portal origin through
-`authCallbackOrigin` while the node actually serves that portal.
+An `aruna://auth/callback` link that arrives from the outside is still
+accepted. The `systemBrowserAuth` flag is what the shell switches off for this;
+a portal that reads neither flag falls back to navigating its own window.
 
 ### Depending on aruna crates
 

@@ -11,6 +11,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::bridge;
+use crate::realm;
 use crate::settings::NodeSettings;
 use crate::state::AppState;
 use crate::windows;
@@ -70,10 +71,13 @@ pub fn context(settings: &NodeSettings, ready: bool) -> ShellContext {
         // The first context of the app; `advance` numbers every later one.
         revision: 0,
         api_base_url,
-        // The only http origin this device can register with a provider is the
-        // node's own portal listener, and only while it serves one.
-        auth_callback_origin: (local && settings.portal_dir.is_some())
-            .then(|| settings.portal_url()),
+        // The realm's website is the one callback a provider registers; without a
+        // realm, only the node's own portal listener can be one, while it serves.
+        auth_callback_origin: settings
+            .realm_url
+            .as_deref()
+            .and_then(|realm| realm::normalize(realm).ok())
+            .or_else(|| (local && settings.portal_dir.is_some()).then(|| settings.portal_url())),
         realm_url: settings.realm_url.clone(),
         features: Features {
             desktop: true,
@@ -220,17 +224,40 @@ mod tests {
     }
 
     #[test]
+    fn offers_realm_callback() {
+        // The callback is the realm website's origin: its port stays, its path goes.
+        let mut settings = NodeSettings::default();
+        settings.remember_realm(
+            "https://aruna.example:8443/portal/",
+            "https://aruna.example:8443/api/v1",
+            None,
+        );
+        assert_eq!(
+            context(&settings, false).auth_callback_origin.as_deref(),
+            Some("https://aruna.example:8443")
+        );
+    }
+
+    #[test]
     fn offers_the_local_callback() {
-        // Only a served local portal is an origin a provider can redirect to.
+        // A known realm wins; without one, only a served local portal is a callback.
         let settings = NodeSettings {
             portal_dir: Some(PathBuf::from("/opt/portal")),
             ..enrolled()
         };
         assert_eq!(
             context(&settings, true).auth_callback_origin.as_deref(),
+            Some("https://aruna.example")
+        );
+        let local = NodeSettings {
+            realm_url: None,
+            ..settings
+        };
+        assert_eq!(
+            context(&local, true).auth_callback_origin.as_deref(),
             Some("http://127.0.0.1:34115")
         );
-        assert!(context(&settings, false).auth_callback_origin.is_none());
+        assert!(context(&local, false).auth_callback_origin.is_none());
     }
 
     #[test]
@@ -258,6 +285,10 @@ mod tests {
         let realm = context(&enrolled(), false);
         let emitted = advance(&mut current, realm.clone()).expect("a moved context");
         assert_eq!(emitted.api_base_url, "https://aruna.example/api/v1");
+        assert_eq!(
+            emitted.auth_callback_origin.as_deref(),
+            Some("https://aruna.example")
+        );
         assert_eq!(emitted.revision, 1);
         // What `shell_context` answers from here on.
         assert_eq!(current, emitted);

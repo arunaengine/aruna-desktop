@@ -91,10 +91,10 @@ pub async fn quit_on_signal(app: AppHandle) {
     quit(app).await;
 }
 
-/// Opens the provider's sign-in page in a window of the app's own. The provider
-/// redirects to this app's scheme; that navigation is never loaded but routed
-/// like a deep link, and the window closes on it. Closing it any other way
-/// tells the portal the sign-in was abandoned.
+/// Opens the provider's sign-in page in a window of the app's own. The realm
+/// website's callback moves on to this app's scheme; that navigation is never
+/// loaded but routed like a deep link, and the window closes on it. Closing it
+/// any other way tells the portal the sign-in was abandoned.
 pub fn open_login(app: &AppHandle, url: Url) -> Result<WebviewWindow, DesktopError> {
     if let Some(open) = app.get_webview_window(LOGIN_LABEL) {
         open.destroy()?;
