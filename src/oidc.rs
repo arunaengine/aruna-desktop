@@ -141,11 +141,16 @@ fn provider_url(raw: &str) -> Result<Url, DesktopError> {
     }
 }
 
+/// Whether a URL names this machine under any alias: every `.localhost` name
+/// (RFC 6761), also with a trailing dot, 127.0.0.0/8, `::1`, and IPv4 in IPv6.
 fn loopback(url: &Url) -> bool {
     match url.host() {
-        Some(Host::Domain(name)) => name == "localhost",
+        Some(Host::Domain(name)) => {
+            let name = name.trim_end_matches('.');
+            name == "localhost" || name.ends_with(".localhost")
+        }
         Some(Host::Ipv4(ip)) => ip.is_loopback(),
-        Some(Host::Ipv6(ip)) => ip.is_loopback(),
+        Some(Host::Ipv6(ip)) => ip.is_loopback() || ip.to_ipv4().is_some_and(|ip| ip.is_loopback()),
         None => false,
     }
 }
@@ -273,6 +278,64 @@ mod tests {
         let remote = "https://idp.example/token";
         client.remember(&local, &document(json!({ "token_endpoint": remote })));
         assert!(client.allowed(remote).is_ok());
+    }
+
+    #[test]
+    fn spots_loopback_aliases() {
+        let local = |raw: &str| loopback(&Url::parse(raw).expect("a URL"));
+        for alias in [
+            "https://localhost/",
+            "https://localhost./",
+            "https://login.localhost/",
+            "https://login.localhost./",
+            "https://127.1.2.3/",
+            "https://[::1]/",
+            "https://[::ffff:127.0.0.1]/",
+            "https://[::127.0.0.1]/",
+        ] {
+            assert!(local(alias), "{alias}");
+        }
+        for remote in [
+            "https://idp.example/",
+            "https://localhost.example/",
+            "https://notlocalhost/",
+            "https://128.0.0.1/",
+            "https://[::2]/",
+            "https://[::ffff:10.0.0.1]/",
+        ] {
+            assert!(!local(remote), "{remote}");
+        }
+    }
+
+    #[test]
+    fn refuses_loopback_aliases() {
+        // A remote document cannot name this machine under any alias; a local one
+        // still names its own origin, and only that.
+        let client = OidcClient::new().expect("an HTTP client");
+        let remote = discovery_url("https://idp.example/.well-known/openid-configuration")
+            .expect("a discovery address");
+        let other = "http://127.0.0.1:9000/token";
+        for host in [
+            "localhost.",
+            "login.localhost",
+            "127.1.2.3",
+            "[::ffff:127.0.0.1]",
+            "[::127.0.0.1]",
+        ] {
+            let token = format!("https://{host}/token");
+            client.remember(&remote, &document(json!({ "token_endpoint": token })));
+            assert!(client.allowed(&token).is_err(), "{token}");
+
+            let local = discovery_url(&format!(
+                "http://{host}:8080/.well-known/openid-configuration"
+            ))
+            .expect("a local discovery address");
+            let own = format!("http://{host}:8080/token");
+            client.remember(&local, &document(json!({ "token_endpoint": own })));
+            assert!(client.allowed(&own).is_ok(), "{own}");
+            client.remember(&local, &document(json!({ "token_endpoint": other })));
+            assert!(client.allowed(other).is_err(), "{host}");
+        }
     }
 
     #[test]
