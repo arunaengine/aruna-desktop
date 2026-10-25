@@ -21,7 +21,7 @@ and `Ctrl+Q` elsewhere, using that same graceful shutdown path.
 window  ->  the portal artifact in ui/        (one build, web and desktop)
 shell   ->  window.__ARUNA_DESKTOP__          (api base, features, bridge)
 events  ->  context-changed, navigate, …      (what moved since boot)
-bridge  ->  node supervisor, settings, compute probe, enrollment, paths, wipe
+bridge  ->  node supervisor, settings, compute probe, enrollment, paths, wipe, update
 node    ->  a supervised aruna child process on loopback
 ```
 
@@ -37,6 +37,7 @@ icons/                                     the bundle icon set, from the brand m
 versions.json                              the pinned aruna version and portal release
 scripts/sync-frontend.sh                   installs the portal into ui/
 scripts/install-dev-desktop.sh             desktop entry + icons for a dev run
+scripts/update-manifest.sh                 writes a release's latest.json for in-app updates
 ui/                                        the portal artifact (gitignored)
 ```
 
@@ -313,6 +314,39 @@ for the target, installs it and the pinned portal release through the two sync
 scripts, and runs `tauri build`. A `v*` tag must be `v` plus the pinned aruna
 version and publishes the bundles as a GitHub release; a manual run only
 uploads them as workflow artifacts.
+
+### In-app updates
+
+When the realm runs a newer aruna version than the app, the update screen can
+install the app of exactly that version. It uses the Tauri updater plugin: the
+app reads `latest.json` from the release tagged `v<realm version>` in the
+repository named in `Cargo.toml`, downloads the installer for its own platform
+and installer type, checks its signature and installs it. Windows then starts
+the new version itself; elsewhere the screen asks for a restart. An older realm
+is never followed in-app, since the local node data may be newer than that
+version can read.
+
+| Installed from | In-app update |
+| --- | --- |
+| Linux `.AppImage` | replaced in place |
+| Linux `.deb`, `.rpm` | installed as a package, after a system password prompt |
+| Windows NSIS `.exe` | the installer runs and starts the new version |
+| macOS `.dmg` | the app bundle is replaced |
+
+Anything else, and every release without a signed entry for that installer,
+keeps the download link. Signing needs, once per repository:
+
+```bash
+npx @tauri-apps/cli@2.11.5 signer generate -w ~/.tauri/aruna-desktop.key
+```
+
+- secret `TAURI_SIGNING_PRIVATE_KEY`: the content of the private key file
+- secret `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`: its password
+- variable `TAURI_UPDATER_PUBKEY`: the content of the `.pub` file
+
+The release workflow then signs the installers and publishes `latest.json`
+with the release. `tauri.conf.json` keeps the public key empty, so local builds
+have no in-app update.
 
 ## The portal artifact
 

@@ -3,7 +3,9 @@ name: release
 # One installer per platform, each carrying the app, the aruna node it
 # supervises and the portal it serves. The aruna and portal releases come from
 # versions.json. A tag publishes a GitHub release; a manual run only uploads
-# the bundles as workflow artifacts.
+# the bundles as workflow artifacts. With the update signing secrets set, the
+# installers are signed and the release carries the latest.json the app's
+# in-app update reads.
 on:
   push:
     tags:
@@ -29,9 +31,10 @@ jobs:
           - os: windows-2022
             target: x86_64-pc-windows-msvc
             bundles: nsis
+          # The app bundle is what the updater archives and replaces.
           - os: macos-14
             target: aarch64-apple-darwin
-            bundles: dmg
+            bundles: app,dmg
     steps:
       - uses: actions/checkout@v4
 
@@ -81,9 +84,32 @@ jobs:
         shell: bash
         run: bash scripts/sync-frontend.sh
 
+      # The public key is configuration, not a secret; without both halves the
+      # bundles are built unsigned and the app keeps the download fallback.
+      - name: Prepare the update signing
+        id: signing
+        shell: bash
+        env:
+          PUBKEY: ${{ vars.TAURI_UPDATER_PUBKEY }}
+          HAS_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
+        run: |
+          if [ -n "$PUBKEY" ] && [ "$HAS_KEY" = true ]; then
+            jq -n --arg key "$PUBKEY" '{bundle: {createUpdaterArtifacts: true}, plugins: {updater: {pubkey: $key}}}' > "$RUNNER_TEMP/updater.json"
+            echo "config=$RUNNER_TEMP/updater.json" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::TAURI_UPDATER_PUBKEY or TAURI_SIGNING_PRIVATE_KEY is not set; the bundles get no in-app update"
+          fi
+
       - name: Bundle the app
         shell: bash
-        run: npx --yes @tauri-apps/cli@2.11.5 build --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          UPDATER_CONFIG: ${{ steps.signing.outputs.config }}
+        run: |
+          extra=()
+          if [ -n "$UPDATER_CONFIG" ]; then extra=(--config "$UPDATER_CONFIG"); fi
+          npx --yes @tauri-apps/cli@2.11.5 build --target ${{ matrix.target }} --bundles ${{ matrix.bundles }} "${extra[@]}"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -95,6 +121,8 @@ jobs:
             target/${{ matrix.target }}/release/bundle/appimage/*.AppImage
             target/${{ matrix.target }}/release/bundle/nsis/*.exe
             target/${{ matrix.target }}/release/bundle/dmg/*.dmg
+            target/${{ matrix.target }}/release/bundle/macos/*.app.tar.gz
+            target/${{ matrix.target }}/release/bundle/*/*.sig
 
       - uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/v')
@@ -105,3 +133,28 @@ jobs:
             target/${{ matrix.target }}/release/bundle/appimage/*.AppImage
             target/${{ matrix.target }}/release/bundle/nsis/*.exe
             target/${{ matrix.target }}/release/bundle/dmg/*.dmg
+            target/${{ matrix.target }}/release/bundle/macos/*.app.tar.gz
+            target/${{ matrix.target }}/release/bundle/*/*.sig
+
+  # Runs after every platform, so one that failed only loses its own entry.
+  manifest:
+    needs: bundle
+    if: ${{ !cancelled() && startsWith(github.ref, 'refs/tags/v') }}
+    runs-on: ubuntu-22.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Publish the update manifest
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/sigs"
+          gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --pattern '*.sig' --dir "$RUNNER_TEMP/sigs" || true
+          if ! compgen -G "$RUNNER_TEMP/sigs/*.sig" >/dev/null; then
+            echo "::warning::the release has no update signatures, so no latest.json is published"
+            exit 0
+          fi
+          base="https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME"
+          bash scripts/update-manifest.sh "${GITHUB_REF_NAME#v}" "$base" "$RUNNER_TEMP/sigs" > "$RUNNER_TEMP/latest.json"
+          gh release upload "$GITHUB_REF_NAME" "$RUNNER_TEMP/latest.json" --repo "$GITHUB_REPOSITORY" --clobber
