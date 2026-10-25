@@ -8,6 +8,7 @@ mod realm;
 mod settings;
 mod shell;
 mod state;
+mod update;
 #[cfg(target_os = "linux")]
 mod wayland;
 mod windows;
@@ -66,6 +67,9 @@ pub fn run() {
             bridge::validate_realm,
             bridge::enroll_invite_last,
             bridge::app_quit,
+            bridge::app_restart,
+            bridge::update_check,
+            bridge::update_install,
         ]);
     let handler = move |invoke: tauri::ipc::Invoke<tauri::Wry>| {
         let command = invoke.message.command();
@@ -81,7 +85,8 @@ pub fn run() {
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_shell::init());
+        .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_updater::Builder::new().build());
 
     // Only macOS keeps the menu out of the window; elsewhere closing the window quits.
     #[cfg(target_os = "macos")]

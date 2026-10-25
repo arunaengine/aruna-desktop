@@ -39,6 +39,7 @@ tauri-plugin-deep-link = "2.4.9"
 tauri-plugin-dialog = "2.7.2"
 tauri-plugin-opener = "2.5.4"
 tauri-plugin-shell = "2.3.5"
+tauri-plugin-updater = "2.12.0"
 thiserror = "2.0.20"
 tokio = { version = "1.53.1", features = ["io-util", "macros", "process", "rt", "signal", "sync", "time"] }
 tracing = "0.1.44"

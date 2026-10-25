@@ -24,11 +24,12 @@ use crate::realm::{self, RealmTarget};
 use crate::settings::{LocalSettings, NodeSettings, SettingsPatch};
 use crate::shell::{self, ShellContext};
 use crate::state::AppState;
+use crate::update::{self, UpdateOffer};
 use crate::windows;
 
 /// Every command this shell answers. A name that is not here is rejected as
 /// unknown, which the portal reads as a bridge missing that half.
-pub const KNOWN: [&str; 17] = [
+pub const KNOWN: [&str; 20] = [
     "shell_context",
     "node_status",
     "node_logs_tail",
@@ -46,6 +47,9 @@ pub const KNOWN: [&str; 17] = [
     "validate_realm",
     "enroll_invite_last",
     "app_quit",
+    "app_restart",
+    "update_check",
+    "update_install",
 ];
 
 /// The phrase `wipe_device` demands back before it destroys anything. The
@@ -468,6 +472,36 @@ pub async fn oidc_token(
 pub async fn app_quit(app: AppHandle) -> Result<(), DesktopError> {
     windows::quit(app).await;
     Ok(())
+}
+
+/// Ends the app and starts it again, stopping the node first; an installed update runs then.
+#[tauri::command]
+pub async fn app_restart(app: AppHandle) -> Result<(), DesktopError> {
+    windows::restart(app).await;
+    Ok(())
+}
+
+/// The signed build of the realm's aruna version this app can install itself,
+/// or `None` when only a download from elsewhere can update it.
+#[tauri::command]
+pub async fn update_check(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Option<UpdateOffer>, DesktopError> {
+    let update = update::find(&app, &state).await?;
+    Ok(update.map(|update| UpdateOffer {
+        version: update.version,
+    }))
+}
+
+/// Downloads and installs that build, reporting `update-progress` on the way.
+/// On Windows the installer ends the app and starts the new version itself.
+#[tauri::command]
+pub async fn update_install(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), DesktopError> {
+    update::install(&app, &state).await
 }
 
 fn web_url(raw: &str) -> Result<String, DesktopError> {

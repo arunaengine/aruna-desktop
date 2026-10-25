@@ -18,6 +18,8 @@ pub enum DesktopError {
     Tauri(#[from] tauri::Error),
     #[error(transparent)]
     Http(#[from] reqwest::Error),
+    #[error(transparent)]
+    Update(#[from] tauri_plugin_updater::Error),
     #[error("invalid deep link: {0}")]
     DeepLink(String),
     #[error("invalid realm address: {0}")]

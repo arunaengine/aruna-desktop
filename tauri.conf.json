@@ -20,6 +20,10 @@
           "aruna"
         ]
       }
+    },
+    "updater": {
+      "pubkey": "",
+      "requireSignedVersion": true
     }
   },
   "bundle": {

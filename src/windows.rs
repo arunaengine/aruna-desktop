@@ -71,6 +71,15 @@ pub async fn quit(app: AppHandle) {
     app.exit(0);
 }
 
+/// Like `quit`, but the app starts again, which is how an installed update runs.
+pub async fn restart(app: AppHandle) {
+    if !app.state::<AppState>().claim_quit() {
+        return;
+    }
+    app.state::<AppState>().supervisor.shutdown().await;
+    app.request_restart();
+}
+
 /// Runs the quit path on SIGTERM or SIGINT, so a logout, a service stop or a
 /// kill leaves no node behind.
 #[cfg(unix)]
