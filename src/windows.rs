@@ -49,6 +49,12 @@ pub fn open_main(app: &AppHandle, context: &ShellContext) -> Result<WebviewWindo
         .initialization_script(shell::init_script(context))
         .build()?;
 
+    // Outside macOS the menu sits in the window; hidden, it still serves Ctrl+Q.
+    #[cfg(not(target_os = "macos"))]
+    if let Err(error) = window.hide_menu() {
+        tracing::warn!(%error, "Could not hide the window menu");
+    }
+
     let owner = app.clone();
     window.on_window_event(move |event| {
         // Closing the app window ends the app, but the node it supervises gets
