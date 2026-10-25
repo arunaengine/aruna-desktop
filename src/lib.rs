@@ -13,12 +13,14 @@ mod wayland;
 mod windows;
 
 use tauri::Manager;
+#[cfg(target_os = "macos")]
 use tauri::menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder};
 use tauri_plugin_deep_link::DeepLinkExt;
 use tracing_subscriber::EnvFilter;
 
 use crate::state::AppState;
 
+#[cfg(target_os = "macos")]
 const QUIT_MENU_ID: &str = "quit-aruna-desktop";
 
 /// Boots the native control window. The aruna node itself always runs as a
@@ -75,11 +77,15 @@ pub fn run() {
         commands(invoke)
     };
 
-    builder
+    let builder = builder
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_shell::init());
+
+    // Only macOS keeps the menu out of the window; elsewhere closing the window quits.
+    #[cfg(target_os = "macos")]
+    let builder = builder
         .menu(|app| {
             let quit = MenuItemBuilder::with_id(QUIT_MENU_ID, "Quit Aruna Desktop")
                 .accelerator("CmdOrCtrl+Q")
@@ -101,7 +107,9 @@ pub fn run() {
             if event.id() == QUIT_MENU_ID {
                 tauri::async_runtime::spawn(windows::quit(app.clone()));
             }
-        })
+        });
+
+    builder
         .setup(|app| {
             let handle = app.handle().clone();
             let state = AppState::build(&handle)?;
