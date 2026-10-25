@@ -1,6 +1,6 @@
 [package]
 name = "aruna-desktop"
-version = "3.0.0-alpha.134"
+version = "3.0.0-alpha.135"
 description = "Desktop shell for a local Aruna user node"
 edition = "2024"
 rust-version = "1.97.1"
