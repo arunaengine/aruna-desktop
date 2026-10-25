@@ -472,6 +472,8 @@ impl Supervisor {
             .env("PATH", compute::tool_path());
         #[cfg(windows)]
         command.creation_flags(compute::CREATE_NO_WINDOW);
+        #[cfg(target_os = "linux")]
+        end_with_parent(command.as_std_mut());
         // The compute profile is written key by key, so an inherited one would
         // survive in the keys this start does not write: drop them all first.
         for (key, _) in std::env::vars_os() {
@@ -646,6 +648,25 @@ fn signal_term(pid: u32) -> bool {
     }
 }
 
+/// Has the kernel send SIGTERM to the node when the spawning thread dies, so a
+/// crashed app never leaves it running. Spawn only from a long-lived thread.
+#[cfg(target_os = "linux")]
+fn end_with_parent(command: &mut std::process::Command) {
+    use std::os::unix::process::CommandExt;
+    let parent = rustix::process::getpid();
+    // SAFETY: the hook only makes async-signal-safe system calls.
+    unsafe {
+        command.pre_exec(move || {
+            rustix::process::set_parent_process_death_signal(Some(rustix::process::Signal::TERM))?;
+            // The parent may have died before the signal was armed.
+            if rustix::process::getppid() != Some(parent) {
+                return Err(std::io::ErrorKind::BrokenPipe.into());
+            }
+            Ok(())
+        });
+    }
+}
+
 /// Windows has no SIGTERM, so the caller falls through to the kill path.
 #[cfg(not(unix))]
 fn signal_term(_pid: u32) -> bool {
@@ -663,6 +684,27 @@ mod tests {
             ready,
             ..NodeStatus::default()
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn ends_with_parent() {
+        use std::os::unix::process::ExitStatusExt;
+        // The death signal follows the spawning thread, so a short-lived one
+        // stands in for a crashed app.
+        let mut child = std::thread::spawn(|| {
+            let mut command = std::process::Command::new("sleep");
+            command.arg("60");
+            end_with_parent(&mut command);
+            command.spawn().expect("spawn sleep")
+        })
+        .join()
+        .expect("spawning thread");
+        let status = child.wait().expect("wait for sleep");
+        assert_eq!(
+            status.signal(),
+            Some(rustix::process::Signal::TERM.as_raw())
+        );
     }
 
     #[test]
