@@ -363,9 +363,10 @@ The `custom-protocol` feature is what embeds `ui/`; without it Tauri loads the
 dev URL, whatever the profile says. The Tauri CLI turns it on for `tauri build`
 by itself.
 
-On Wayland the app sets `WEBKIT_DISABLE_DMABUF_RENDERER=1` before the webview
-starts, unless that variable or `ARUNA_DESKTOP_NO_WAYLAND_WORKAROUND` is already
-set.
+On Wayland the app sets `__NV_DISABLE_EXPLICIT_SYNC=1` before the webview starts
+when the NVIDIA driver is loaded, and `WEBKIT_DISABLE_DMABUF_RENDERER=1` on other
+GPUs. It sets neither when one of them or `ARUNA_DESKTOP_NO_WAYLAND_WORKAROUND` is
+already set.
 
 ### The window icon on Linux
 
