@@ -25,6 +25,164 @@ bridge  ->  node supervisor, settings, compute probe, enrollment, paths, wipe, u
 node    ->  a supervised aruna child process on loopback
 ```
 
+## Install
+
+Aruna Desktop connects your computer to an Aruna realm. It runs a small Aruna node on your
+machine and shows the same portal you use on the web. Your files sync with the realm, and your
+jobs can run on your computer.
+
+### Before you start
+
+- **A realm account.** You need an account on an Aruna realm, for example
+  [v3.aruna-engine.org](https://v3.aruna-engine.org). The app joins that realm as one of your
+  devices.
+- **The matching version.** The app version must match the version the realm runs. Download the
+  release whose number equals the realm's version (the realm shows it on its portal). You can
+  install later versions from inside the app (see [Updates](#updates)).
+- **Local runs (optional).** To run your own jobs on this computer, install
+  [Docker](https://docs.docker.com/get-docker/). On Linux, [Apptainer](https://apptainer.org/)
+  works too. Without either, the app still syncs files, but it cannot run jobs locally.
+
+### Download
+
+Open the [releases page](https://github.com/arunaengine/aruna-desktop/releases) and pick the
+release that matches your realm. Each release has one file per system:
+
+| System | File ending in | Notes |
+| --- | --- | --- |
+| Linux (Debian, Ubuntu) | `.deb` | x86_64 |
+| Linux (Fedora, RHEL, openSUSE) | `.rpm` | x86_64 |
+| Linux (any) | `.AppImage` | x86_64, no installation needed |
+| Windows 10 and 11 | `-setup.exe` | x86_64 |
+| macOS | `.dmg` | Apple silicon (M1 or newer) only |
+
+Each file includes the app, the Aruna node and the portal. Nothing else is downloaded during the
+installation.
+
+### Linux
+
+Open a terminal in your downloads folder and run the command for your system. If that folder holds
+older Aruna files, type the full file name instead of `Aruna*`.
+
+Debian and Ubuntu:
+
+```bash
+sudo apt install ./Aruna*.deb
+```
+
+Fedora, RHEL and openSUSE:
+
+```bash
+sudo dnf install ./Aruna*.rpm        # openSUSE: sudo zypper install ./Aruna*.rpm
+```
+
+AppImage, without installing anything:
+
+```bash
+chmod +x ./Aruna*.AppImage
+./Aruna*.AppImage
+```
+
+Some distributions need `libfuse2` for AppImages (`sudo apt install libfuse2` on Ubuntu).
+The `.deb` and `.rpm` packages add **Aruna Desktop** to your application menu.
+
+### Windows
+
+Run the downloaded `-setup.exe` file and follow the installer. The installer is not
+signed with a Windows code signing certificate yet, so Windows SmartScreen may show "Windows
+protected your PC". Click **More info**, then **Run anyway**.
+
+### macOS
+
+Open the `.dmg` and drag **Aruna Desktop** into **Applications**. The app is not notarized by
+Apple yet, so the first start shows a warning that it cannot be checked. Open it once this way:
+
+1. In **Applications**, right-click **Aruna Desktop** and choose **Open**.
+2. Confirm with **Open**.
+
+On macOS 15 and newer, this no longer works. Try to start the app once, then open **System
+Settings**, go to **Privacy & Security**, and choose **Open Anyway** next to the message about
+Aruna Desktop.
+
+If macOS still refuses, run this once in Terminal and start the app again:
+
+```bash
+xattr -dr com.apple.quarantine "/Applications/Aruna Desktop.app"
+```
+
+### First start: connect this computer to your realm
+
+1. **Start Aruna Desktop.** It asks you to **Connect to your realm**. Enter the realm address,
+   for example `v3.aruna-engine.org`, and confirm.
+2. **Sign in** with your realm account. The sign-in page opens in a separate window and closes by
+   itself when you finish.
+3. **Add this computer as a device.** In the portal, open **Settings**, then **Access &
+   connection**. Under **Devices**, choose **Add a device**. On the last step, choose **Open in
+   Aruna Desktop**. This sends the setup code straight to your local node. If you do this in a web
+   browser instead, the button opens the app.
+4. **Wait for setup to finish.** The device page shows the progress. When it is done, your
+   computer is listed as one of your devices, and the local node starts with the app from now on.
+
+The one-time code expires. If connecting fails because the code is "expired, already used, or not
+valid", create a new code with **Add a device**.
+
+### Using the app
+
+- **Link a folder.** In the data view, choose **Link a local folder** to keep a local folder and a
+  realm bucket in sync, one way or both ways.
+- **Run jobs locally.** Jobs started on **This computer** run locally with Docker or Apptainer. The
+  limits for local runs (how many at a time, CPU, memory, disk) are in the device settings.
+- **Pause.** A paused device runs nothing: no sync, no local jobs. Resume to start it again.
+- **Quit.** Closing the window quits the app and stops the local node cleanly
+  (**Quit Aruna Desktop**, `Ctrl+Q`, or `Command+Q` on macOS).
+
+### Updates
+
+When your realm moves to a newer version, the app shows an update screen. It installs the
+matching app version in the same way you first installed it:
+
+| Installed from | Update |
+| --- | --- |
+| `.AppImage` | replaced in place |
+| `.deb`, `.rpm` | installed as a package, after a password prompt |
+| Windows installer | the installer runs and starts the new version |
+| macOS `.dmg` | the app is replaced; restart it afterward |
+
+The app never moves to an older version, because your local data may already be newer than an
+older version can read. If an update cannot be installed from inside the app, the screen offers
+the download link instead.
+
+### Where your data is
+
+The local node keeps its data in the app's data folder:
+
+| System | Folder |
+| --- | --- |
+| Linux | `~/.local/share/engine.aruna.desktop` |
+| Windows | `%APPDATA%\engine.aruna.desktop` |
+| macOS | `~/Library/Application Support/engine.aruna.desktop` |
+
+The storage location can be changed in the device settings.
+
+### Uninstall
+
+Remove the app the usual way for your system: the package manager on Linux (or just delete the
+AppImage), **Apps** in the Windows settings, or move the app to the Trash on macOS.
+
+Uninstalling leaves the data folder in place. Delete that folder to remove your local data. Files
+already synced to the realm stay on the realm.
+
+### Troubleshooting
+
+- **"Update required".** The realm runs a different version from the app. Install the app version
+  the realm runs, or use the update screen.
+- **Setup does not finish.** The device page names the reason. "The realm will not take another
+  device for this owner" means the realm accepts no more devices for your account. "The previous
+  join was interrupted" means you need a new code from **Add a device**.
+- **No local runs.** Check that Docker is running (`docker info`), or on Linux that Apptainer is
+  installed. The device settings show which backend the app found.
+- **Logs.** The device page shows the last lines of the local node's output when it stops.
+
 ## Layout
 
 A plain Rust application: the crate is the repository.
