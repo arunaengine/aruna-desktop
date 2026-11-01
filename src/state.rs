@@ -39,12 +39,12 @@ impl AppState {
         let resources = paths.resource_dir().ok();
 
         let stored = NodeSettings::load(&settings_path);
-        let mut tracker = Tracker::default();
-        if stored.enrolled {
-            tracker
-                .progress
-                .settle(stored.seed_url.clone(), stored.realm.clone());
-        }
+        let tracker = Tracker::resume(
+            stored.enrolled,
+            stored.onboarding_secret.is_some(),
+            stored.seed_url.clone(),
+            stored.realm.clone(),
+        );
 
         let context = shell::context(&stored, false);
         let settings = Arc::new(Mutex::new(stored));

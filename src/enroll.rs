@@ -128,6 +128,25 @@ pub struct Tracker {
     pub cursor: u64,
 }
 
+impl Tracker {
+    /// The tracker a launch starts with. An armed secret the realm has not
+    /// confirmed yet is still watched, so a restart mid-join can finish it.
+    pub fn resume(
+        enrolled: bool,
+        armed: bool,
+        seed: Option<String>,
+        realm: Option<String>,
+    ) -> Self {
+        let mut tracker = Self::default();
+        if enrolled {
+            tracker.progress.settle(seed, realm);
+        } else if armed {
+            tracker.progress.accept(seed.as_deref(), realm.as_deref());
+        }
+        tracker
+    }
+}
+
 /// Turns one line of the node's output into a targeted enrollment failure.
 ///
 /// The joiner logs nothing through tracing about the join: it prints a single
@@ -168,6 +187,26 @@ mod tests {
         let mut progress = EnrollProgress::default();
         progress.accept(Some("https://seed.example"), Some("realm-1"));
         progress
+    }
+
+    #[test]
+    fn resumes_armed_secret() {
+        let seed = Some("https://seed.example".to_string());
+        let realm = Some("realm-1".to_string());
+
+        let mut armed = Tracker::resume(false, true, seed.clone(), realm.clone()).progress;
+        assert!(armed.active());
+        armed.observe(Observed {
+            state: NodeState::Running,
+            ready: true,
+            in_realm: true,
+            refusal: None,
+        });
+        assert_eq!(armed.phase, EnrollPhase::Visible);
+
+        let enrolled = Tracker::resume(true, false, seed.clone(), realm.clone()).progress;
+        assert_eq!(enrolled.phase, EnrollPhase::Done);
+        assert!(!Tracker::resume(false, false, seed, realm).progress.active());
     }
 
     #[test]

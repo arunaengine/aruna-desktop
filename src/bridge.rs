@@ -58,6 +58,8 @@ const WIPE_PHRASE: &str = "wipe";
 const REALM_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 /// How often a running node is checked against the realm's version.
 const VERSION_POLL: Duration = Duration::from_secs(60);
+/// How often the shell checks an enrollment it finishes on its own.
+const ENROLL_POLL: Duration = Duration::from_secs(3);
 
 /// The supervisor's state in the four the portal renders. `Stopping` counts as
 /// stopped and `Restarting` as starting: both are on their way to that state.
@@ -303,6 +305,7 @@ pub async fn arm(
     state.supervisor.stop().await;
     start_node(&state).await?;
     shell::sync(app);
+    tauri::async_runtime::spawn(watch_enrollment(app.clone()));
 
     Ok(EnrollResult {
         node_id: None,
@@ -636,6 +639,27 @@ fn realm_mismatch(settings_realm: Option<&str>, probed: Option<&str>) -> Option<
 struct Seen {
     ready: bool,
     info: NodeInfo,
+}
+
+/// Finishes a running enrollment without the portal, which may be signed out or
+/// closed while the node joins; otherwise the spent secret would stay armed.
+pub(crate) async fn watch_enrollment(app: AppHandle) {
+    loop {
+        tokio::time::sleep(ENROLL_POLL).await;
+        let state = app.state::<AppState>();
+        if !state.progress().active() {
+            return;
+        }
+        let node = state.supervisor.status();
+        let seen = match node.state {
+            NodeState::Running => Some(look(&state).await),
+            _ => None,
+        };
+        if let Err(error) = settle(&state, &node, seen.as_ref()).await {
+            tracing::warn!(%error, "Could not record the enrollment");
+        }
+        shell::sync(&app);
+    }
 }
 
 async fn look(state: &AppState) -> Seen {
