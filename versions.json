@@ -1,11 +1,11 @@
 {
   "aruna": {
-    "version": "3.0.0-alpha.139",
-    "ref": "41634de84a820bd6c642c60e28c6d46d9aca5d49"
+    "version": "3.0.0-alpha.140",
+    "ref": "4c9c9d9d4e489f23a535568d636e6fe46ed8ba02"
   },
   "portal": {
-    "tag": "local-8b421e88",
-    "ref": "8b421e8836f3497d0db7ba5166eaf8f469ea9578",
+    "tag": "local-ecb12b00",
+    "ref": "ecb12b006c7d94f6af408f4d4d74ce0c71e7ebd5",
     "sha256": "placeholder-no-published-portal-release"
   }
 }

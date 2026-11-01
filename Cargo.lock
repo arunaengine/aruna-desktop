@@ -58,7 +58,7 @@ dependencies = [
 
 [[package]]
 name = "aruna-desktop"
-version = "3.0.0-alpha.139"
+version = "3.0.0-alpha.140"
 dependencies = [
  "reqwest",
  "rustix",
