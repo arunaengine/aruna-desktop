@@ -4,8 +4,8 @@
     "ref": "21def933d0a088e440c212a3b573672f7f9a6847"
   },
   "portal": {
-    "tag": "v0.6.21-portal.2",
-    "ref": "133fa9361a11695126fd4cc1944bcedcf4ba5311",
-    "sha256": "f2ad376181ff7ee77622f46fba33c6f99960d8cff6f98cf4afe247a964967bef"
+    "tag": "v0.6.21-portal.3",
+    "ref": "8486f018940e06063ad7b7e75c4da555bbd0ef14",
+    "sha256": "8a8d6713f088525ac8794be9513460ec6d12f52d409b58e4b4aa6c455d020e3c"
   }
 }
