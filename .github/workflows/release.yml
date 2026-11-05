@@ -19,6 +19,9 @@ jobs:
   bundle:
     name: ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
+    env:
+      # Windows runners have no NASM; aws-lc-sys then uses its prebuilt NASM objects.
+      AWS_LC_SYS_PREBUILT_NASM: 1
     strategy:
       fail-fast: false
       matrix:
