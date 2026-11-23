@@ -1,11 +1,11 @@
 {
   "aruna": {
-    "version": "3.0.0-alpha.159",
-    "ref": "21def933d0a088e440c212a3b573672f7f9a6847"
+    "version": "3.0.0-alpha.208",
+    "ref": "f28d8ea8aae39897a892047f0fe4210c99b23811"
   },
   "portal": {
-    "tag": "v0.6.21-portal.3",
-    "ref": "8486f018940e06063ad7b7e75c4da555bbd0ef14",
-    "sha256": "8a8d6713f088525ac8794be9513460ec6d12f52d409b58e4b4aa6c455d020e3c"
+    "tag": "v0.6.22-portal.1",
+    "ref": "0b7eb521de9a499d7d12a444df6b472ecf1bdf7b",
+    "sha256": "d52e3ecfa6606cea05d55abebe3a94def0f7253651968386948c453af99d0653"
   }
 }
